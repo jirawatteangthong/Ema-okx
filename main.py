@@ -22,12 +22,12 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '15m'
-LEVERAGE = 20
-TP_DISTANCE_POINTS = 500  
-SL_DISTANCE_POINTS = 999  
-BE_PROFIT_TRIGGER_POINTS = 350  
-BE_SL_BUFFER_POINTS = 80   
+TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
+LEVERAGE = 20    # อัปเดต Leverage
+TP_DISTANCE_POINTS = 100  # อาจจะลอง 50 จุด
+SL_DISTANCE_POINTS = 200  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
+BE_PROFIT_TRIGGER_POINTS = 40  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+BE_SL_BUFFER_POINTS = 10   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
@@ -46,7 +46,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', 'YOUR_CHAT_ID_HERE_FOR_LOCAL_TE
 STATS_FILE = 'trading_stats.json' # ควรเปลี่ยนเป็น '/data/trading_stats.json' หากใช้ Railway Volume
 
 # --- Bot Timing ---
-MAIN_LOOP_SLEEP_SECONDS = 300 
+MAIN_LOOP_SLEEP_SECONDS = 180 
 ERROR_RETRY_SLEEP_SECONDS = 60
 MONTHLY_REPORT_DAY = 20
 MONTHLY_REPORT_HOUR = 0
@@ -290,7 +290,7 @@ def send_telegram(msg: str):
         url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
         params = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}
         response = requests.get(url, params=params, timeout=10)
-        response.raise_or_status()
+        response.raise_for_status() # <--- แก้ไขตรงนี้: raise_for_status
         logger.info(f"✉️ Telegram: {msg.splitlines()[0]}...")
     except requests.exceptions.Timeout:
         logger.error("⛔️ Error: ไม่สามารถส่งข้อความ Telegram ได้ (Timeout)")
@@ -314,30 +314,29 @@ def get_portfolio_balance() -> float:
         try:
             logger.debug(f"🔍 กำลังดึงยอดคงเหลือ (Attempt {i+1}/{retries})...")
             # For OKX, fetch_balance() returns account-wide balance
-            balance_data = exchange.fetch_balance(params={'type': 'futures'}) # or 'swap', 'funding', etc. based on where your funds are
+            # OKX uses 'balance' for funding account, 'account' for unified account (trading/futures/swap)
+            # Use params={'type': 'trade'} for unified account funds, or 'funding' for funding account
+            balance_data = exchange.fetch_balance(params={'type': 'trade'}) 
             time.sleep(1) 
             
-            # OKX balance structure might be in 'info'
-            total_equity_usdt = float(balance_data.get('USDT', {}).get('total', 0.0))
-            if total_equity_usdt == 0: # Try alternative ways to get equity if 'total' is 0
-                 # Try from 'info' which contains original OKX API response
+            usdt_balance = 0.0
+            # OKX balance structure in CCXT is usually balance.get('USDT', {}).get('free') for trade type
+            if 'USDT' in balance_data and 'free' in balance_data['USDT']:
+                usdt_balance = float(balance_data['USDT']['free'])
+            else: # Fallback to parsing raw 'info' if CCXT doesn't map it directly
                 okx_balance_info = balance_data.get('info', {}).get('data', [])
                 if okx_balance_info:
                     for account in okx_balance_info:
-                        if account.get('ccy') == 'USDT' and account.get('balType') == 'total': # Look for total equity
-                            total_equity_usdt = float(account.get('eq', 0.0)) # eq is total equity
-                            break
-                        # If trading account balance is desired, need to look for 'margin' or 'trade' related balances
-                        elif account.get('ccy') == 'USDT' and account.get('type') == 'TRADE':
-                            total_equity_usdt = float(account.get('availableBal', 0.0)) # available for trading
+                        if account.get('ccy') == 'USDT' and account.get('type') == 'TRADE':
+                            usdt_balance = float(account.get('availBal', 0.0)) # availBal is available balance for trading
                             break
             
-            if total_equity_usdt > 0:
-                portfolio_balance = total_equity_usdt
+            if usdt_balance > 0:
+                portfolio_balance = usdt_balance
                 logger.info(f"💰 ยอดคงเหลือ USDT (OKX): {portfolio_balance:,.2f}")
                 return portfolio_balance
             else:
-                 logger.warning("⚠️ ไม่พบยอดคงเหลือ USDT ที่ใช้งานได้ในบัญชี OKX.")
+                 logger.warning("⚠️ ไม่พบยอดคงเหลือ USDT ที่ใช้งานได้ในบัญชี OKX (availBal).")
                  return 0.0
 
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -359,37 +358,38 @@ def get_current_position() -> dict | None:
     for i in range(retries):
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
-            positions = exchange.fetch_positions([SYMBOL]) 
+            # OKX fetch_positions requires parameters to specify instrument type
+            positions = exchange.fetch_positions([SYMBOL]) # Will fetch for the given SYMBOL
             logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
             time.sleep(1) 
             
             for pos in positions:
                 # OKX returns position information in 'info' dict
+                # 'instId' is the symbol (e.g., BTC-USDT-SWAP)
                 # 'posAmt' is the position amount (contracts)
                 # 'posSide' is 'long' or 'short' (or 'net' if in Net mode)
-                # 'instId' is the symbol
                 pos_info = pos.get('info', {})
                 okx_symbol = pos_info.get('instId')
-                pos_amount_raw = pos_info.get('posCcy') # OKX uses posCcy for contracts, or posAmt sometimes
-                pos_amount_raw_okx = pos_info.get('posAmt') # Alternative for contracts on OKX
+                pos_amount_str = pos_info.get('posAmt') # This is the position amount as a string
 
-                # Use instId for symbol comparison, and check posAmt for non-zero contracts
-                if okx_symbol == SYMBOL and float(pos_amount_raw_okx or 0) != 0: # Using posAmt for contracts
-                    pos_amount = abs(float(pos_amount_raw_okx))
-                    entry_price_okx = float(pos_info.get('avgPx')) # avgPx is average entry price
-                    unrealized_pnl_okx = float(pos_info.get('upl')) # upl is unrealized PnL
+                # Ensure symbol matches and amount is non-zero
+                if okx_symbol == SYMBOL and float(pos_amount_str or 0) != 0: # Check posAmt
+                    pos_amount = abs(float(pos_amount_str))
+                    entry_price_okx = float(pos_info.get('avgPx', 0.0)) # avgPx is average entry price
+                    unrealized_pnl_okx = float(pos_info.get('upl', 0.0)) # upl is unrealized PnL
 
-                    # OKX posSide can be 'long', 'short', 'net'
-                    side = pos_info.get('posSide').lower() 
-                    if side == 'net': # If Net mode, need to derive side from posAmt
-                        side = 'long' if float(pos_amount_raw_okx) > 0 else 'short'
-                    
+                    # Determine side from posSide from info, or from posAmt if in Net mode
+                    side = pos_info.get('posSide', '').lower() 
+                    if side == 'net': # If Net mode, side from posAmt
+                        side = 'long' if float(pos_amount_str) > 0 else 'short'
+                    # If Hedge mode, posSide will be 'long' or 'short' directly
+
                     return {
                         'side': side,
                         'size': pos_amount, 
                         'entry_price': entry_price_okx,
                         'unrealized_pnl': unrealized_pnl_okx,
-                        'pos_id': pos.get('id', 'N/A') # OKX position ID might not be directly in 'id'
+                        'pos_id': pos.get('id', 'N/A') 
                     }
             return None 
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -887,7 +887,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
 
     try:
         logger.info("⏳ กำลังยกเลิกคำสั่ง Stop Loss เก่า...")
-        # OKX Algo Orders (TP/SL) have ordType='conditional' and algoOrdType='sl'
+        # OKX Algo Orders (TP/SL) have ordType='conditional' and algoOrdType='sl' or 'tp'
         open_algo_orders = exchange.fetch_open_orders(SYMBOL, params={'ordType': 'conditional'})
         
         sl_order_ids_to_cancel = []
