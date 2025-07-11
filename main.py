@@ -32,7 +32,7 @@ CROSS_THRESHOLD_POINTS = 1
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 MARGIN_BUFFER_USDT = 5 
-TARGET_POSITION_SIZE_FACTOR = 0.8  
+TARGET_POSITION_SIZE_FACTOR = 0.3  
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
