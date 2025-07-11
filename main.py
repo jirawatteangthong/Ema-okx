@@ -22,7 +22,7 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
+TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
 LEVERAGE = 20    # อัปเดต Leverage
 TP_DISTANCE_POINTS = 100  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 200  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
@@ -59,7 +59,7 @@ TP_SL_BE_PRICE_TOLERANCE_PERCENT = 0.005
 # 2. การตั้งค่า Logging
 # ==============================================================================
 logging.basicConfig(
-    level=logging.INFO, # <--- แนะนำ INFO สำหรับการใช้งานปกติ, หากติดปัญหาค่อยเปลี่ยนเป็น DEBUG
+    level=logging.DEBUG, # <--- แนะนำ INFO สำหรับการใช้งานปกติ, หากติดปัญหาค่อยเปลี่ยนเป็น DEBUG
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('bot.log', encoding='utf-8'),
