@@ -32,7 +32,7 @@ CROSS_THRESHOLD_POINTS = 1
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 MARGIN_BUFFER_USDT = 5 
-TARGET_POSITION_SIZE_FACTOR = 0.3  
+TARGET_POSITION_SIZE_FACTOR = 0.8  
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -792,6 +792,7 @@ def cancel_all_open_tp_sl_orders():
         send_telegram(f"⛔️ Unexpected Error: ไม่สามารถยกเลิก TP/SL เก่าได้\nรายละเอียด: {e}")
 
 
+# ใน set_tpsl_for_position
 def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
     global current_position_size
 
@@ -824,23 +825,23 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
     try:
         tp_sl_side = 'sell' if direction == 'long' else 'buy'
         
-        # OKX TP/SL orders use 'triggerPrice' and need 'tdMode' and 'posSide'
         common_params = {
             'tdMode': 'cross',
-            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
+            'posSide': direction,
+            'reduceOnly': True, # Important for closing position
         }
 
         logger.info(f"⏳ Setting Take Profit order at {tp_price:.2f}...")
         tp_order = exchange.create_order(
             symbol=SYMBOL,
-            type='TAKE_PROFIT_MARKET', # OKX uses TAKE_PROFIT_MARKET/STOP_LOSS_MARKET
+            type='TAKE_PROFIT_MARKET',
             side=tp_sl_side,
-            amount=current_position_size, # Contracts quantity
-            price=None, # Market order, no limit price
+            amount=current_position_size,
+            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
+            price=0, # Use 0 for MARKET execution when triggered
             params={
-                'triggerPrice': tp_price, # OKX uses triggerPrice
-                **common_params, # Merge common params
-                'reduceOnly': True, # Important for closing position
+                'triggerPrice': tp_price,
+                **common_params,
             }
         )
         logger.info(f"✅ Take Profit order placed: ID → {tp_order.get('id', 'N/A')}")
@@ -848,14 +849,14 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
         logger.info(f"⏳ Setting Stop Loss order at {sl_price:.2f}...")
         sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
+            type='STOP_LOSS_MARKET',
             side=tp_sl_side,         
             amount=current_position_size,         
-            price=None,         
+            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
+            price=0, # Use 0 for MARKET execution when triggered
             params={
-                'triggerPrice': sl_price, # OKX uses triggerPrice
-                **common_params, # Merge common params
-                'reduceOnly': True, # Important for closing position
+                'triggerPrice': sl_price,
+                **common_params,
             }
         )
         logger.info(f"✅ Stop Loss order placed: ID → {sl_order.get('id', 'N/A')}")
@@ -871,7 +872,7 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
         send_telegram(f"⛔️ Unexpected Error (TP/SL): {e}")
         return False
 
-
+# ใน move_sl_to_breakeven ก็ต้องแก้ไขคล้ายกัน
 def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
     """เลื่อน Stop Loss ไปที่จุด Breakeven (หรือ +BE_SL_BUFFER_POINTS) บน OKX Futures/Swap."""
     global sl_moved, current_position_size
@@ -921,23 +922,23 @@ def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
 
         new_sl_side = 'sell' if direction == 'long' else 'buy'
         
-        # OKX SL order parameters
         new_sl_params = {
             'tdMode': 'cross',
-            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
+            'posSide': direction,
+            'reduceOnly': True,
         }
 
         logger.info(f"⏳ Setting new Stop Loss (Breakeven) order at {breakeven_sl_price:.2f}...")
         new_sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
+            type='STOP_LOSS_MARKET',
             side=new_sl_side,
             amount=current_position_size, 
-            price=None,
+            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
+            price=0, # Use 0 for MARKET execution when triggered
             params={
-                'triggerPrice': breakeven_sl_price, # OKX uses triggerPrice
+                'triggerPrice': breakeven_sl_price,
                 **new_sl_params,
-                'reduceOnly': True,
             }
         )
         logger.info(f"✅ เลื่อน SL ไปที่กันทุนสำเร็จ: Trigger Price: {breakeven_sl_price:.2f}, ID: {new_sl_order.get('id', 'N/A')}")
@@ -955,7 +956,6 @@ def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
         logger.error(f"❌ Unexpected error moving SL to breakeven: {e}", exc_info=True)
         send_telegram(f"⛔️ Unexpected Error (Move SL): {e}")
         return False
-
 
 # ==============================================================================
 # 12. ฟังก์ชันตรวจสอบสถานะ (MONITORING FUNCTIONS)
