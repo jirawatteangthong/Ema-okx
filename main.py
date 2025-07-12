@@ -22,7 +22,7 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
+TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
 LEVERAGE = 20    # อัปเดต Leverage
 TP_DISTANCE_POINTS = 300  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
