@@ -358,40 +358,48 @@ def get_current_position() -> dict | None:
     for i in range(retries):
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
-            # OKX fetch_positions requires parameters to specify instrument type
-            positions = exchange.fetch_positions([SYMBOL]) # Will fetch for the given SYMBOL
-            logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
-            time.sleep(1) 
+            positions = exchange.fetch_positions([SYMBOL])
+            logger.debug(f"DEBUG: Raw positions fetched: {positions}")
+            time.sleep(1)
+
+            # กรองหาเฉพาะตำแหน่งที่มีอยู่จริงสำหรับ SYMBOL ที่สนใจ
+            active_positions = [
+                pos for pos in positions
+                if pos.get('info', {}).get('instId') == SYMBOL and float(pos.get('info', {}).get('pos', '0')) != 0
+            ]
             
-            for pos in positions:
-                # OKX returns position information in 'info' dict
-                # 'instId' is the symbol (e.g., BTC-USDT-SWAP)
-                # 'posAmt' is the position amount (contracts)
-                # 'posSide' is 'long' or 'short' (or 'net' if in Net mode)
+            if not active_positions:
+                logger.debug(f"ℹ️ ไม่พบตำแหน่งที่เปิดอยู่สำหรับ {SYMBOL}")
+                return None
+
+            # เนื่องจากเราอยู่ใน Hedge Mode ควรจะมีแค่ Long หรือ Short ที่ Active ในแต่ละครั้ง (สำหรับ bot นี้)
+            # หรือหากเปิดสลับด้าน ก็ควรมีแค่ 1 ตำแหน่งตามหลักการของ bot
+            # แต่ถ้าเป็น Hedge Mode ที่เทรดสองด้านพร้อมกัน จะต้องระบุ posSide ให้ชัดเจน
+            for pos in active_positions:
                 pos_info = pos.get('info', {})
-                okx_symbol = pos_info.get('instId')
-                pos_amount_str = pos_info.get('posAmt') # This is the position amount as a string
+                pos_amount_str = pos_info.get('pos') # ใช้ 'pos' แทน 'posAmt' ซึ่งมักจะถูกต้องกว่าสำหรับขนาดตำแหน่ง
+                
+                pos_amount = abs(float(pos_amount_str))
+                entry_price_okx = float(pos_info.get('avgPx', 0.0))
+                unrealized_pnl_okx = float(pos_info.get('upl', 0.0))
+                
+                # ใน Hedge Mode, posSide จะเป็น 'long' หรือ 'short' โดยตรง
+                side = pos_info.get('posSide', '').lower()
 
-                # Ensure symbol matches and amount is non-zero
-                if okx_symbol == SYMBOL and float(pos_amount_str or 0) != 0: # Check posAmt
-                    pos_amount = abs(float(pos_amount_str))
-                    entry_price_okx = float(pos_info.get('avgPx', 0.0)) # avgPx is average entry price
-                    unrealized_pnl_okx = float(pos_info.get('upl', 0.0)) # upl is unrealized PnL
-
-                    # Determine side from posSide from info, or from posAmt if in Net mode
-                    side = pos_info.get('posSide', '').lower() 
-                    if side == 'net': # If Net mode, side from posAmt
-                        side = 'long' if float(pos_amount_str) > 0 else 'short'
-                    # If Hedge mode, posSide will be 'long' or 'short' directly
-
+                # ตรวจสอบอีกครั้งว่า side ไม่ใช่ 'net' (เผื่อมีตำแหน่งเก่าค้าง)
+                if side != 'net' and pos_amount > 0:
+                    logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
                         'side': side,
-                        'size': pos_amount, 
+                        'size': pos_amount,
                         'entry_price': entry_price_okx,
                         'unrealized_pnl': unrealized_pnl_okx,
-                        'pos_id': pos.get('id', 'N/A') 
+                        'pos_id': pos.get('id', 'N/A')
                     }
-            return None 
+            
+            logger.debug(f"⚠️ พบข้อมูลตำแหน่งสำหรับ {SYMBOL} แต่ไม่ตรงกับเงื่อนไข active/hedge mode.")
+            return None # ไม่พบตำแหน่งที่ตรงกับเงื่อนไข active/hedge mode
+            
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.warning(f"⚠️ Error fetching positions (Attempt {i+1}/{retries}): {e}. Retrying in 15 seconds...")
             if i == retries - 1:
@@ -400,7 +408,7 @@ def get_current_position() -> dict | None:
         except Exception as e:
             logger.error(f"❌ Unexpected error in get_current_position: {e}", exc_info=True)
             send_telegram(f"⛔️️ Unexpected Error: ไม่สามารถดึงโพซิชันได้\nรายละเอียด: {e}")
-            return None 
+            return None
     logger.error(f"❌ Failed to fetch positions after {retries} attempts.")
     send_telegram(f"⛔️ API Error: ล้มเหลวในการดึงโพซิชันหลังจาก {retries} ครั้ง.")
     return None
