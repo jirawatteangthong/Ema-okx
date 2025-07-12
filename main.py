@@ -23,7 +23,7 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
 TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
-LEVERAGE = 20    # อัปเดต Leverage
+LEVERAGE = 40    # อัปเดต Leverage
 TP_DISTANCE_POINTS = 300  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
 BE_PROFIT_TRIGGER_POINTS = 100  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
@@ -32,7 +32,7 @@ CROSS_THRESHOLD_POINTS = 1
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 MARGIN_BUFFER_USDT = 5 
-TARGET_POSITION_SIZE_FACTOR = 0.8  
+TARGET_POSITION_SIZE_FACTOR = 0.9  # หากต้องการออเดอร์ใหญ่ขึ้น ให้เพิ่มค่านี้ เช่น 0.5 หรือ 0.8 หรือ 1.0
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -353,16 +353,19 @@ def get_portfolio_balance() -> float:
     return 0.0
 
 def get_current_position() -> dict | None:
-    """ตรวจสอบและดึงข้อมูลโพซิชัน BTC/USDT ปัจจุบันสำหรับ OKX."""
+    """
+    ตรวจสอบและดึงข้อมูลโพซิชัน BTC/USDT ปัจจุบันสำหรับ OKX.
+    ปรับปรุงให้รองรับ Hedge Mode และใช้ 'pos' field.
+    """
     retries = 3
     for i in range(retries):
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
-            positions = exchange.fetch_positions([SYMBOL])
-            logger.debug(f"DEBUG: Raw positions fetched: {positions}")
-            time.sleep(1)
-
-            # กรองหาเฉพาะตำแหน่งที่มีอยู่จริงสำหรับ SYMBOL ที่สนใจ
+            positions = exchange.fetch_positions([SYMBOL]) 
+            logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
+            time.sleep(1) 
+            
+            # กรองหาเฉพาะตำแหน่งที่มีอยู่จริงสำหรับ SYMBOL ที่สนใจและมีขนาดไม่เป็น 0
             active_positions = [
                 pos for pos in positions
                 if pos.get('info', {}).get('instId') == SYMBOL and float(pos.get('info', {}).get('pos', '0')) != 0
@@ -372,9 +375,7 @@ def get_current_position() -> dict | None:
                 logger.debug(f"ℹ️ ไม่พบตำแหน่งที่เปิดอยู่สำหรับ {SYMBOL}")
                 return None
 
-            # เนื่องจากเราอยู่ใน Hedge Mode ควรจะมีแค่ Long หรือ Short ที่ Active ในแต่ละครั้ง (สำหรับ bot นี้)
-            # หรือหากเปิดสลับด้าน ก็ควรมีแค่ 1 ตำแหน่งตามหลักการของ bot
-            # แต่ถ้าเป็น Hedge Mode ที่เทรดสองด้านพร้อมกัน จะต้องระบุ posSide ให้ชัดเจน
+            # ใน Hedge Mode เราจะดึงข้อมูลตาม posSide ที่ระบุ
             for pos in active_positions:
                 pos_info = pos.get('info', {})
                 pos_amount_str = pos_info.get('pos') # ใช้ 'pos' แทน 'posAmt' ซึ่งมักจะถูกต้องกว่าสำหรับขนาดตำแหน่ง
@@ -383,23 +384,22 @@ def get_current_position() -> dict | None:
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
                 unrealized_pnl_okx = float(pos_info.get('upl', 0.0))
                 
-                # ใน Hedge Mode, posSide จะเป็น 'long' หรือ 'short' โดยตรง
                 side = pos_info.get('posSide', '').lower()
 
-                # ตรวจสอบอีกครั้งว่า side ไม่ใช่ 'net' (เผื่อมีตำแหน่งเก่าค้าง)
+                # ตรวจสอบว่า side ไม่ใช่ 'net' และ pos_amount มีค่ามากกว่า 0
                 if side != 'net' and pos_amount > 0:
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
                         'side': side,
-                        'size': pos_amount,
+                        'size': pos_amount, 
                         'entry_price': entry_price_okx,
                         'unrealized_pnl': unrealized_pnl_okx,
-                        'pos_id': pos.get('id', 'N/A')
+                        'pos_id': pos.get('id', 'N/A') 
                     }
             
             logger.debug(f"⚠️ พบข้อมูลตำแหน่งสำหรับ {SYMBOL} แต่ไม่ตรงกับเงื่อนไข active/hedge mode.")
             return None # ไม่พบตำแหน่งที่ตรงกับเงื่อนไข active/hedge mode
-            
+
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.warning(f"⚠️ Error fetching positions (Attempt {i+1}/{retries}): {e}. Retrying in 15 seconds...")
             if i == retries - 1:
@@ -408,7 +408,7 @@ def get_current_position() -> dict | None:
         except Exception as e:
             logger.error(f"❌ Unexpected error in get_current_position: {e}", exc_info=True)
             send_telegram(f"⛔️️ Unexpected Error: ไม่สามารถดึงโพซิชันได้\nรายละเอียด: {e}")
-            return None
+            return None 
     logger.error(f"❌ Failed to fetch positions after {retries} attempts.")
     send_telegram(f"⛔️ API Error: ล้มเหลวในการดึงโพซิชันหลังจาก {retries} ครั้ง.")
     return None
@@ -792,8 +792,7 @@ def cancel_all_open_tp_sl_orders():
         send_telegram(f"⛔️ Unexpected Error: ไม่สามารถยกเลิก TP/SL เก่าได้\nรายละเอียด: {e}")
 
 
-# ใน set_tpsl_for_position
-def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
+def set_tpsl_for_position(direction: str, entry_price: float, current_market_price: float) -> bool: # <-- เพิ่ม current_market_price
     global current_position_size
 
     if not current_position_size:
@@ -825,23 +824,23 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
     try:
         tp_sl_side = 'sell' if direction == 'long' else 'buy'
         
+        # OKX TP/SL orders use 'triggerPrice' and need 'tdMode' and 'posSide'
         common_params = {
             'tdMode': 'cross',
-            'posSide': direction,
+            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
             'reduceOnly': True, # Important for closing position
         }
 
         logger.info(f"⏳ Setting Take Profit order at {tp_price:.2f}...")
         tp_order = exchange.create_order(
             symbol=SYMBOL,
-            type='TAKE_PROFIT_MARKET',
+            type='TAKE_PROFIT_MARKET', # OKX uses TAKE_PROFIT_MARKET/STOP_LOSS_MARKET
             side=tp_sl_side,
-            amount=current_position_size,
-            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
-            price=0, # Use 0 for MARKET execution when triggered
+            amount=current_position_size, # Contracts quantity
+            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
             params={
-                'triggerPrice': tp_price,
-                **common_params,
+                'triggerPrice': tp_price, # OKX uses triggerPrice
+                **common_params, # Merge common params
             }
         )
         logger.info(f"✅ Take Profit order placed: ID → {tp_order.get('id', 'N/A')}")
@@ -849,14 +848,13 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
         logger.info(f"⏳ Setting Stop Loss order at {sl_price:.2f}...")
         sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET',
+            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
             side=tp_sl_side,         
             amount=current_position_size,         
-            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
-            price=0, # Use 0 for MARKET execution when triggered
+            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
             params={
-                'triggerPrice': sl_price,
-                **common_params,
+                'triggerPrice': sl_price, # OKX uses triggerPrice
+                **common_params, # Merge common params
             }
         )
         logger.info(f"✅ Stop Loss order placed: ID → {sl_order.get('id', 'N/A')}")
@@ -872,8 +870,8 @@ def set_tpsl_for_position(direction: str, entry_price: float) -> bool:
         send_telegram(f"⛔️ Unexpected Error (TP/SL): {e}")
         return False
 
-# ใน move_sl_to_breakeven ก็ต้องแก้ไขคล้ายกัน
-def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
+
+def move_sl_to_breakeven(direction: str, entry_price: float, current_market_price: float) -> bool: # <-- เพิ่ม current_market_price
     """เลื่อน Stop Loss ไปที่จุด Breakeven (หรือ +BE_SL_BUFFER_POINTS) บน OKX Futures/Swap."""
     global sl_moved, current_position_size
 
@@ -922,22 +920,22 @@ def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
 
         new_sl_side = 'sell' if direction == 'long' else 'buy'
         
+        # OKX SL order parameters
         new_sl_params = {
             'tdMode': 'cross',
-            'posSide': direction,
+            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
             'reduceOnly': True,
         }
 
         logger.info(f"⏳ Setting new Stop Loss (Breakeven) order at {breakeven_sl_price:.2f}...")
         new_sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET',
+            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
             side=new_sl_side,
             amount=current_position_size, 
-            # *** แก้ไขตรงนี้: กำหนด price เป็น 0 เพื่อให้เป็น Market Order เมื่อ Trigger ***
-            price=0, # Use 0 for MARKET execution when triggered
+            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
             params={
-                'triggerPrice': breakeven_sl_price,
+                'triggerPrice': breakeven_sl_price, # OKX uses triggerPrice
                 **new_sl_params,
             }
         )
@@ -956,6 +954,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float) -> bool:
         logger.error(f"❌ Unexpected error moving SL to breakeven: {e}", exc_info=True)
         send_telegram(f"⛔️ Unexpected Error (Move SL): {e}")
         return False
+
 
 # ==============================================================================
 # 12. ฟังก์ชันตรวจสอบสถานะ (MONITORING FUNCTIONS)
@@ -1036,7 +1035,8 @@ def monitor_position(pos_info: dict | None, current_price: float):
 
         if not sl_moved and pnl_in_points >= BE_PROFIT_TRIGGER_POINTS:
             logger.info(f"ℹ️ กำไรถึงจุดเลื่อน SL: {pnl_in_points:,.0f} จุด (PnL: {unrealized_pnl:,.2f} USDT)")
-            move_sl_to_breakeven(current_position_details['side'], entry_price)
+            # <-- แก้ไข: ส่ง current_price ไปยัง move_sl_to_breakeven
+            move_sl_to_breakeven(current_position_details['side'], entry_price, current_price)
 
 # ==============================================================================
 # 13. ฟังก์ชันรายงานประจำเดือน (MONTHLY REPORT FUNCTIONS)
@@ -1204,6 +1204,7 @@ def main():
                 time.sleep(ERROR_RETRY_SLEEP_SECONDS)
                 continue
             
+            # ส่ง current_price เข้าไปใน monitor_position
             monitor_position(current_pos_info, current_price)
 
             if not current_pos_info: 
@@ -1217,7 +1218,8 @@ def main():
                     market_order_success, confirmed_entry_price = open_market_order(signal, current_price)
 
                     if market_order_success and confirmed_entry_price:
-                        set_tpsl_success = set_tpsl_for_position(signal, confirmed_entry_price)
+                        # <-- แก้ไข: ส่ง current_price ไปยัง set_tpsl_for_position
+                        set_tpsl_success = set_tpsl_for_position(signal, confirmed_entry_price, current_price)
 
                         if set_tpsl_success:
                             logger.info(f"✅ เปิดออเดอร์ {signal.upper()} และตั้ง TP/SL สำเร็จ.")
@@ -1254,3 +1256,4 @@ def main():
 # ==============================================================================
 if __name__ == '__main__':
     main()
+
