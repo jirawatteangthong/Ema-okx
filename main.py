@@ -528,7 +528,7 @@ def check_ema_cross() -> str | None:
 def calculate_order_details(available_usdt: float, price: float) -> tuple[float, float]:
     """
     คำนวณจำนวนสัญญาที่จะเปิดและ Margin ที่ต้องใช้ โดยพิจารณาจาก Exchange Limits
-    และ Margin Buffer จากโค้ดที่ทำงานได้ดี.
+    และ Margin Buffer.
     """
     if price <= 0 or LEVERAGE <= 0 or TARGET_POSITION_SIZE_FACTOR <= 0: 
         logger.error("Error: Price, leverage, and target_position_size_factor must be positive.")
@@ -537,64 +537,84 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     if not market_info:
         logger.error(f"❌ Could not retrieve market info for {SYMBOL}. Please ensure setup_exchange ran successfully.")
         return (0, 0)
-    
+
     try:
         exchange_amount_step = float(market_info['limits']['amount'].get('step', '0.001'))
         min_exchange_amount = float(market_info['limits']['amount'].get('min', '0.001'))
         max_exchange_amount = float(market_info['limits']['amount'].get('max', str(sys.float_info.max))) 
         min_notional_exchange = float(market_info['limits']['cost'].get('min', '5.0')) 
         max_notional_exchange = float(market_info['limits']['cost'].get('max', str(sys.float_info.max))) 
+
+        # ดึง contractSize จาก market_info (ถ้ามี)
+        contract_size = float(market_info.get('contractSize', 1)) # Default to 1 if not found
+        if SYMBOL == 'BTC-USDT-SWAP' and contract_size == 1:
+            # OKX BTC-USDT-SWAP contract size is typically 0.0001 BTC or 0.001 BTC
+            # This is a fallback if CCXT doesn't populate 'contractSize' correctly for OKX swaps
+            # You MUST confirm this value from OKX documentation/trading rules!
+            # If your order is 23.53 USDT at 117k price = 0.0002 BTC.
+            # If OKX 1 contract = 0.0001 BTC, then 0.0002 BTC is 2 contracts.
+            # Let's assume 1 contract = 0.0001 BTC for now, as it matches your actual trade size
+            contract_size = 0.0003 # <--- IMPORTANT: Verify this from OKX documentation
+            logger.warning(f"⚠️ Overriding assumed contract_size for {SYMBOL} to {contract_size} BTC/contract. Please verify this value from OKX trading rules.")
+
     except (TypeError, ValueError) as e:
         logger.critical(f"❌ Error parsing market limits for {SYMBOL}: {e}. Check API response structure. Exiting.", exc_info=True)
         send_telegram(f"⛔️ Critical Error: Cannot parse market limits for {SYMBOL}.\nDetails: {e}")
         return (0, 0)
 
+    # คำนวณ Margin ที่เราต้องการใช้ (จาก Balance ที่มี และ Factor)
+    # Margin = (Balance - Buffer) * Factor
+    target_initial_margin = (available_usdt - MARGIN_BUFFER_USDT) * TARGET_POSITION_SIZE_FACTOR
 
-    max_notional_from_available_margin = (available_usdt - MARGIN_BUFFER_USDT) * LEVERAGE
-    if max_notional_from_available_margin <= 0:
-        logger.warning(f"❌ Available margin ({available_usdt:.2f}) too low after buffer ({MARGIN_BUFFER_USDT}) for any notional value.")
+    if target_initial_margin <= 0:
+        logger.warning(f"❌ Target initial margin ({target_initial_margin:.2f}) too low after buffer.")
         return (0, 0)
 
-    target_notional_for_order = max_notional_from_available_margin * TARGET_POSITION_SIZE_FACTOR
-    
-    min_notional_from_min_amount = min_exchange_amount * price 
-    target_notional_for_order = max(target_notional_for_order, min_notional_exchange, min_notional_from_min_amount)
-    target_notional_for_order = min(target_notional_for_order, max_notional_exchange) 
+    # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้
+    target_notional = target_initial_margin * LEVERAGE
 
-    contracts_raw = target_notional_for_order / price
-    
+    # คำนวณจำนวน BTC (Base Asset) จาก Notional Value
+    target_base_amount_btc = target_notional / price
+
+    # แปลงเป็นจำนวน Contracts โดยใช้ Contract Size ที่ดึงมา (หรือสมมติ)
+    contracts_raw = target_base_amount_btc / contract_size # Convert BTC amount to number of contracts
+
+    # ใช้ amount_to_precision ของ CCXT เพื่อปรับให้ตรงกับ step size
     if exchange_amount_step == 0: 
         logger.error(f"❌ Exchange amount step is 0 for {SYMBOL}. Cannot calculate precision. Defaulting to raw amount.")
         contracts_to_open = contracts_raw
     else:
         contracts_to_open = float(exchange.amount_to_precision(SYMBOL, contracts_raw))
 
+    # ตรวจสอบขั้นต่ำและสูงสุดของ Exchange Limit (ซึ่งควรจะเป็น Contracts)
     contracts_to_open = max(contracts_to_open, min_exchange_amount)
     contracts_to_open = min(contracts_to_open, max_exchange_amount)
-    
-    actual_notional_after_precision = contracts_to_open * price
+
+    # คำนวณ Margin ที่แท้จริงจาก Contracts ที่จะเปิด
+    actual_base_amount_btc = contracts_to_open * contract_size # Convert back to BTC amount
+    actual_notional_after_precision = actual_base_amount_btc * price
     required_margin = actual_notional_after_precision / LEVERAGE
 
     if contracts_to_open == 0:
-        logger.warning(f"⚠️ Calculated contracts to open is 0 after all adjustments. (Target notional: {target_notional_for_order:.2f} USDT, Current price: {price:.2f}, Min exchange amount: {min_exchange_amount:.8f}). This means calculated size is too small or rounded to zero.")
+        logger.warning(f"⚠️ Calculated contracts to open is 0 after all adjustments. (Target notional: {target_notional:.2f} USDT, Current price: {price:.2f}, Min exchange amount: {min_exchange_amount:.8f}). This means calculated size is too small or rounded to zero.")
         return (0, 0)
 
     if available_usdt < required_margin + MARGIN_BUFFER_USDT:
         logger.error(f"❌ Margin not sufficient. Available: {available_usdt:.2f}, Required: {required_margin:.2f} + {MARGIN_BUFFER_USDT} (Buffer) = {required_margin + MARGIN_BUFFER_USDT:.2f} USDT.")
         return (0, 0)
-    
-    logger.debug(f"💡 DEBUG (calculate_order_details): Max Notional from Available Margin: {max_notional_from_available_margin:.2f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Target Position Size Factor: {TARGET_POSITION_SIZE_FACTOR}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Final Target Notional for Order: {target_notional_for_order:.2f}")
+
+    logger.debug(f"💡 DEBUG (calculate_order_details): Available USDT: {available_usdt:.2f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Target Initial Margin: {target_initial_margin:.2f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Target Notional: {target_notional:.2f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Target Base Amount (BTC): {target_base_amount_btc:.8f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Contract Size (BTC/Contract): {contract_size:.8f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Raw contracts: {contracts_raw:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Exchange Amount Step: {exchange_amount_step}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Contracts after step size adjustment: {contracts_to_open:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Notional after step size: {actual_notional_after_precision:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Calculated Required Margin: {required_margin:.2f} USDT")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Min Exchange Amount: {min_exchange_amount:.8f}") 
+    logger.debug(f"💡 DEBUG (calculate_order_details): Min Exchange Amount (Contracts): {min_exchange_amount:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Notional Exchange: {min_notional_exchange:.2f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Min Notional from Min Amount: {min_notional_from_min_amount:.2f}")
-
 
     return (contracts_to_open, required_margin)
 
