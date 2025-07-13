@@ -23,16 +23,16 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
 TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
-LEVERAGE = 40    # อัปเดต Leverage
+LEVERAGE = 30    # อัปเดต Leverage ตามที่คุณตั้ง
 TP_DISTANCE_POINTS = 300  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
-BE_PROFIT_TRIGGER_POINTS = 100  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+BE_PROFIT_TRIGGER_POINTS = 200  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
 BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 MARGIN_BUFFER_USDT = 5 
-TARGET_POSITION_SIZE_FACTOR = 0.9  # หากต้องการออเดอร์ใหญ่ขึ้น ให้เพิ่มค่านี้ เช่น 0.5 หรือ 0.8 หรือ 1.0
+TARGET_POSITION_SIZE_FACTOR = 0.8  # อัปเดตตามที่คุณต้องการ
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -59,7 +59,7 @@ TP_SL_BE_PRICE_TOLERANCE_PERCENT = 0.005
 # 2. การตั้งค่า Logging
 # ==============================================================================
 logging.basicConfig(
-    level=logging.DEBUG, # <--- แนะนำ INFO สำหรับการใช้งานปกติ, หากติดปัญหาค่อยเปลี่ยนเป็น DEBUG
+    level=logging.INFO, # <--- แนะนำ INFO สำหรับการใช้งานปกติ, หากติดปัญหาค่อยเปลี่ยนเป็น DEBUG
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('bot.log', encoding='utf-8'),
@@ -109,23 +109,23 @@ def setup_exchange():
     global exchange, market_info
     try:
         if not all([API_KEY, SECRET, PASSWORD]) or \
-           API_KEY == 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING': # Check password too for OKX
+           API_KEY == 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING': 
             raise ValueError("API_KEY, SECRET, หรือ PASSWORD (Passphrase) ไม่ถูกตั้งค่าใน Environment Variables.")
 
-        exchange = ccxt.okx({ # <--- เปลี่ยนเป็น OKX
+        exchange = ccxt.okx({ 
             'apiKey': API_KEY,
             'secret': SECRET,
-            'password': PASSWORD, # <--- เพิ่ม Passphrase สำหรับ OKX
+            'password': PASSWORD, 
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'swap', # <--- ใช้ 'swap' สำหรับ OKX Swap
+                'defaultType': 'swap', 
                 'warnOnFetchOHLCVLimitArgument': False,
                 'adjustForTimeDifference': True,
             },
             'verbose': False, 
             'timeout': 30000,
         })
-        exchange.set_sandbox_mode(False) # <--- ตั้งค่าเป็น False สำหรับบัญชีจริง
+        exchange.set_sandbox_mode(False) 
         
         exchange.load_markets()
         logger.info("✅ เชื่อมต่อกับ OKX Exchange สำเร็จ และโหลด Markets แล้ว.")
@@ -134,7 +134,6 @@ def setup_exchange():
         if not market_info:
             raise ValueError(f"ไม่พบข้อมูลตลาดสำหรับสัญลักษณ์ {SYMBOL}")
         
-        # --- ตรวจสอบและกำหนดค่าเริ่มต้นที่เหมาะสมสำหรับ limits ---
         if 'limits' not in market_info:
             market_info['limits'] = {}
         if 'amount' not in market_info['limits']:
@@ -149,21 +148,21 @@ def setup_exchange():
         market_info['limits']['amount']['min'] = float(amount_min) if amount_min is not None else 0.001
         
         amount_max = market_info['limits']['amount'].get('max')
-        market_info['limits']['amount']['max'] = float(amount_max) if amount_max is not None else sys.float_info.max # ใช้ sys.float_info.max
+        market_info['limits']['amount']['max'] = float(amount_max) if amount_max is not None else sys.float_info.max 
 
         cost_min = market_info['limits']['cost'].get('min')
-        market_info['limits']['cost']['min'] = float(cost_min) if cost_min is not None else 5.0 
-
+        market_info['limits']['cost']['min'] = float(cost_min) if cost_min is not None else 11.8 # อัปเดต default ตามข้อมูลล่าสุด
+        
         cost_max = market_info['limits']['cost'].get('max')
         market_info['limits']['cost']['max'] = float(cost_max) if cost_max is not None else sys.float_info.max 
 
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
+        logger.debug(f"  Contract Size: {market_info.get('contractSize', 'N/A')}") 
 
         try:
-            # OKX set_leverage requires type param for future/swap
-            result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) # <--- เพิ่ม mgnMode สำหรับ OKX
+            result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) 
             logger.info(f"✅ ตั้งค่า Leverage เป็น {LEVERAGE}x สำหรับ {SYMBOL}: {result}")
         except ccxt.ExchangeError as e:
             if "leverage is not valid" in str(e) or "not valid for this symbol" in str(e):
@@ -290,7 +289,7 @@ def send_telegram(msg: str):
         url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
         params = {'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status() # <--- แก้ไขตรงนี้: raise_for_status
+        response.raise_for_status() 
         logger.info(f"✉️ Telegram: {msg.splitlines()[0]}...")
     except requests.exceptions.Timeout:
         logger.error("⛔️ Error: ไม่สามารถส่งข้อความ Telegram ได้ (Timeout)")
@@ -313,22 +312,18 @@ def get_portfolio_balance() -> float:
     for i in range(retries):
         try:
             logger.debug(f"🔍 กำลังดึงยอดคงเหลือ (Attempt {i+1}/{retries})...")
-            # For OKX, fetch_balance() returns account-wide balance
-            # OKX uses 'balance' for funding account, 'account' for unified account (trading/futures/swap)
-            # Use params={'type': 'trade'} for unified account funds, or 'funding' for funding account
             balance_data = exchange.fetch_balance(params={'type': 'trade'}) 
             time.sleep(1) 
             
             usdt_balance = 0.0
-            # OKX balance structure in CCXT is usually balance.get('USDT', {}).get('free') for trade type
             if 'USDT' in balance_data and 'free' in balance_data['USDT']:
                 usdt_balance = float(balance_data['USDT']['free'])
-            else: # Fallback to parsing raw 'info' if CCXT doesn't map it directly
+            else: 
                 okx_balance_info = balance_data.get('info', {}).get('data', [])
                 if okx_balance_info:
                     for account in okx_balance_info:
                         if account.get('ccy') == 'USDT' and account.get('type') == 'TRADE':
-                            usdt_balance = float(account.get('availBal', 0.0)) # availBal is available balance for trading
+                            usdt_balance = float(account.get('availBal', 0.0)) 
                             break
             
             if usdt_balance > 0:
@@ -365,7 +360,6 @@ def get_current_position() -> dict | None:
             logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
             time.sleep(1) 
             
-            # กรองหาเฉพาะตำแหน่งที่มีอยู่จริงสำหรับ SYMBOL ที่สนใจและมีขนาดไม่เป็น 0
             active_positions = [
                 pos for pos in positions
                 if pos.get('info', {}).get('instId') == SYMBOL and float(pos.get('info', {}).get('pos', '0')) != 0
@@ -375,10 +369,9 @@ def get_current_position() -> dict | None:
                 logger.debug(f"ℹ️ ไม่พบตำแหน่งที่เปิดอยู่สำหรับ {SYMBOL}")
                 return None
 
-            # ใน Hedge Mode เราจะดึงข้อมูลตาม posSide ที่ระบุ
             for pos in active_positions:
                 pos_info = pos.get('info', {})
-                pos_amount_str = pos_info.get('pos') # ใช้ 'pos' แทน 'posAmt' ซึ่งมักจะถูกต้องกว่าสำหรับขนาดตำแหน่ง
+                pos_amount_str = pos_info.get('pos') 
                 
                 pos_amount = abs(float(pos_amount_str))
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
@@ -386,7 +379,6 @@ def get_current_position() -> dict | None:
                 
                 side = pos_info.get('posSide', '').lower()
 
-                # ตรวจสอบว่า side ไม่ใช่ 'net' และ pos_amount มีค่ามากกว่า 0
                 if side != 'net' and pos_amount > 0:
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
@@ -398,7 +390,7 @@ def get_current_position() -> dict | None:
                     }
             
             logger.debug(f"⚠️ พบข้อมูลตำแหน่งสำหรับ {SYMBOL} แต่ไม่ตรงกับเงื่อนไข active/hedge mode.")
-            return None # ไม่พบตำแหน่งที่ตรงกับเงื่อนไข active/hedge mode
+            return None 
 
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
             logger.warning(f"⚠️ Error fetching positions (Attempt {i+1}/{retries}): {e}. Retrying in 15 seconds...")
@@ -439,7 +431,6 @@ def check_ema_cross() -> str | None:
         for i in range(retries):
             logger.debug(f"🔍 กำลังดึงข้อมูล OHLCV สำหรับ EMA ({i+1}/{retries})...")
             try:
-                # OKX fetch_ohlcv symbol format is same as SYMBOL
                 ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=500) 
                 time.sleep(1) 
                 break
@@ -480,7 +471,6 @@ def check_ema_cross() -> str | None:
         elif ema50_current < ema200_current:
             current_ema_position = 'below'
         
-        # ตรวจสอบสถานะเริ่มต้นของบอท
         if last_ema_position_status is None:
             if current_ema_position:
                 last_ema_position_status = current_ema_position
@@ -500,7 +490,6 @@ def check_ema_cross() -> str | None:
             cross_signal = 'short'
             logger.info(f"🔻 Threshold Death Cross: EMA50({ema50_current:.2f}) is {CROSS_THRESHOLD_POINTS} points below EMA200({ema200_current:.2f})")
 
-        # อัปเดตสถานะ EMA ล่าสุดเสมอหลังจากการประเมินสัญญาณ
         if cross_signal is not None:
             logger.info(f"✨ สัญญาณ EMA Cross ที่ตรวจพบ: {cross_signal.upper()}")
             if current_ema_position != last_ema_position_status:
@@ -527,8 +516,7 @@ def check_ema_cross() -> str | None:
 
 def calculate_order_details(available_usdt: float, price: float) -> tuple[float, float]:
     """
-    คำนวณจำนวนสัญญาที่จะเปิดและ Margin ที่ต้องใช้ โดยพิจารณาจาก Exchange Limits
-    และ Margin Buffer.
+    คำนวณมูลค่า Notional (USDT) ที่จะเปิด และ Margin ที่ต้องใช้
     """
     if price <= 0 or LEVERAGE <= 0 or TARGET_POSITION_SIZE_FACTOR <= 0: 
         logger.error("Error: Price, leverage, and target_position_size_factor must be positive.")
@@ -537,33 +525,23 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     if not market_info:
         logger.error(f"❌ Could not retrieve market info for {SYMBOL}. Please ensure setup_exchange ran successfully.")
         return (0, 0)
-
+    
     try:
-        exchange_amount_step = float(market_info['limits']['amount'].get('step', '0.001'))
-        min_exchange_amount = float(market_info['limits']['amount'].get('min', '0.001'))
-        max_exchange_amount = float(market_info['limits']['amount'].get('max', str(sys.float_info.max))) 
-        min_notional_exchange = float(market_info['limits']['cost'].get('min', '5.0')) 
+        min_notional_exchange = float(market_info['limits']['cost'].get('min', '11.8')) 
         max_notional_exchange = float(market_info['limits']['cost'].get('max', str(sys.float_info.max))) 
-
-        # ดึง contractSize จาก market_info (ถ้ามี)
-        contract_size = float(market_info.get('contractSize', 1)) # Default to 1 if not found
-        if SYMBOL == 'BTC-USDT-SWAP' and contract_size == 1:
-            # OKX BTC-USDT-SWAP contract size is typically 0.0001 BTC or 0.001 BTC
-            # This is a fallback if CCXT doesn't populate 'contractSize' correctly for OKX swaps
-            # You MUST confirm this value from OKX documentation/trading rules!
-            # If your order is 23.53 USDT at 117k price = 0.0002 BTC.
-            # If OKX 1 contract = 0.0001 BTC, then 0.0002 BTC is 2 contracts.
-            # Let's assume 1 contract = 0.0001 BTC for now, as it matches your actual trade size
-            contract_size = 0.0003 # <--- IMPORTANT: Verify this from OKX documentation
-            logger.warning(f"⚠️ Overriding assumed contract_size for {SYMBOL} to {contract_size} BTC/contract. Please verify this value from OKX trading rules.")
-
+        
+        # ยืนยัน Contract Size สำหรับ OKX BTC-USDT-SWAP ตามที่เราได้ข้อมูลจากแอป
+        # 1 Contract = 0.0001 BTC on OKX
+        # นี่คือค่าที่สำคัญมาก ต้องแน่ใจว่าถูกต้องตามเอกสารของ OKX
+        contract_size = 0.0001 
+        logger.debug(f"DEBUG: Confirmed contract_size for {SYMBOL} is {contract_size} BTC/contract.")
+        
     except (TypeError, ValueError) as e:
         logger.critical(f"❌ Error parsing market limits for {SYMBOL}: {e}. Check API response structure. Exiting.", exc_info=True)
         send_telegram(f"⛔️ Critical Error: Cannot parse market limits for {SYMBOL}.\nDetails: {e}")
         return (0, 0)
 
     # คำนวณ Margin ที่เราต้องการใช้ (จาก Balance ที่มี และ Factor)
-    # Margin = (Balance - Buffer) * Factor
     target_initial_margin = (available_usdt - MARGIN_BUFFER_USDT) * TARGET_POSITION_SIZE_FACTOR
 
     if target_initial_margin <= 0:
@@ -571,67 +549,37 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         return (0, 0)
 
     # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้
-    target_notional = target_initial_margin * LEVERAGE
+    target_notional_for_order = target_initial_margin * LEVERAGE
 
-    # คำนวณจำนวน BTC (Base Asset) จาก Notional Value
-    target_base_amount_btc = target_notional / price
+    # ตรวจสอบ Notional Value กับขั้นต่ำและสูงสุดของ Exchange
+    target_notional_for_order = max(target_notional_for_order, min_notional_exchange)
+    target_notional_for_order = min(target_notional_for_order, max_notional_exchange) 
+    
+    # Required margin คือ margin ที่แท้จริงตาม Notional ที่จะเปิด
+    required_margin = target_notional_for_order / LEVERAGE
 
-    # แปลงเป็นจำนวน Contracts โดยใช้ Contract Size ที่ดึงมา (หรือสมมติ)
-    contracts_raw = target_base_amount_btc / contract_size # Convert BTC amount to number of contracts
-
-    # ใช้ amount_to_precision ของ CCXT เพื่อปรับให้ตรงกับ step size
-    if exchange_amount_step == 0: 
-        logger.error(f"❌ Exchange amount step is 0 for {SYMBOL}. Cannot calculate precision. Defaulting to raw amount.")
-        contracts_to_open = contracts_raw
-    else:
-        contracts_to_open = float(exchange.amount_to_precision(SYMBOL, contracts_raw))
-
-    # ตรวจสอบขั้นต่ำและสูงสุดของ Exchange Limit (ซึ่งควรจะเป็น Contracts)
-    contracts_to_open = max(contracts_to_open, min_exchange_amount)
-    contracts_to_open = min(contracts_to_open, max_exchange_amount)
-
-    # คำนวณ Margin ที่แท้จริงจาก Contracts ที่จะเปิด
-    actual_base_amount_btc = contracts_to_open * contract_size # Convert back to BTC amount
-    actual_notional_after_precision = actual_base_amount_btc * price
-    required_margin = actual_notional_after_precision / LEVERAGE
-
-    if contracts_to_open == 0:
-        logger.warning(f"⚠️ Calculated contracts to open is 0 after all adjustments. (Target notional: {target_notional:.2f} USDT, Current price: {price:.2f}, Min exchange amount: {min_exchange_amount:.8f}). This means calculated size is too small or rounded to zero.")
+    if target_notional_for_order == 0:
+        logger.warning(f"⚠️ Calculated notional to open is 0 after all adjustments. (Target initial margin: {target_initial_margin:.2f} USDT).")
         return (0, 0)
 
     if available_usdt < required_margin + MARGIN_BUFFER_USDT:
         logger.error(f"❌ Margin not sufficient. Available: {available_usdt:.2f}, Required: {required_margin:.2f} + {MARGIN_BUFFER_USDT} (Buffer) = {required_margin + MARGIN_BUFFER_USDT:.2f} USDT.")
         return (0, 0)
-
+    
     logger.debug(f"💡 DEBUG (calculate_order_details): Available USDT: {available_usdt:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Target Initial Margin: {target_initial_margin:.2f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Target Notional: {target_notional:.2f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Target Base Amount (BTC): {target_base_amount_btc:.8f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Contract Size (BTC/Contract): {contract_size:.8f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Raw contracts: {contracts_raw:.8f}") 
-    logger.debug(f"💡 DEBUG (calculate_order_details): Exchange Amount Step: {exchange_amount_step}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Contracts after step size adjustment: {contracts_to_open:.8f}") 
-    logger.debug(f"💡 DEBUG (calculate_order_details): Actual Notional after step size: {actual_notional_after_precision:.2f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Calculated Target Notional for Order: {target_notional_for_order:.2f} USDT")
     logger.debug(f"💡 DEBUG (calculate_order_details): Calculated Required Margin: {required_margin:.2f} USDT")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Min Exchange Amount (Contracts): {min_exchange_amount:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Notional Exchange: {min_notional_exchange:.2f}")
 
-    return (contracts_to_open, required_margin)
+    # คืนค่าเป็น (Notional Value, Required Margin)
+    return (target_notional_for_order, required_margin)
 
 
-def confirm_position_entry(expected_direction: str, expected_contracts: float) -> tuple[bool, float | None]:
+def confirm_position_entry(expected_direction: str, expected_contracts_estimate: float) -> tuple[bool, float | None]: 
     """ยืนยันการเปิดโพซิชัน"""
     global current_position_size, entry_price, current_position_details
-
-    try:
-        step_size = float(market_info['limits']['amount'].get('step', '0.001'))
-    except (TypeError, ValueError):
-        logger.critical("❌ Critical Error: market_info['limits']['amount']['step'] is invalid. Cannot confirm position. Re-running setup_exchange might help.")
-        send_telegram("⛔️ Critical Error: Market info step size invalid. Cannot confirm position.")
-        return False, None
-
-    size_tolerance = max(step_size * 2, expected_contracts * 0.001) 
-
+    
     time.sleep(10) 
     logger.info("ℹ️ Initial 10-second sleep before starting position confirmation attempts.")
 
@@ -643,30 +591,27 @@ def confirm_position_entry(expected_direction: str, expected_contracts: float) -
             position_info = get_current_position() 
             
             if position_info and position_info.get('side') == expected_direction:
-                actual_size = position_info.get('size', 0.0)
+                actual_size = position_info.get('size', 0.0) 
                 confirmed_entry_price = position_info.get('entry_price')
                 
-                if math.isclose(actual_size, expected_contracts, rel_tol=size_tolerance):
-                    logger.info(f"✅ ยืนยันโพซิชันสำเร็จ:")
-                    logger.info(f"   - Entry Price: {confirmed_entry_price:.2f}")
-                    logger.info(f"   - Size: {actual_size:,.8f} Contracts") 
-                    logger.info(f"   - Direction: {expected_direction.upper()}")
-                    
-                    current_position_size = actual_size
-                    entry_price = confirmed_entry_price
-                    current_position_details = position_info 
-                    
-                    profit_loss = position_info.get('unrealized_pnl', 0)
-                    send_telegram(
-                        f"🎯 เปิดโพซิชัน {expected_direction.upper()} สำเร็จ\n"
-                        f"📊 ขนาด: {actual_size:,.8f} Contracts\n" 
-                        f"💰 Entry: {confirmed_entry_price:.2f}\n"
-                        f"📈 P&L: {profit_loss:,.2f} USDT"
-                    )
-                    
-                    return True, confirmed_entry_price
-                else:
-                    logger.warning(f"⚠️ ขนาดโพซิชันไม่ตรงกัน (คาดหวัง: {expected_contracts:,.8f}, ได้: {actual_size:,.8f}). Tolerance: {size_tolerance:.8f}")
+                logger.info(f"✅ ยืนยันโพซิชันสำเร็จ:")
+                logger.info(f"   - Entry Price: {confirmed_entry_price:.2f}")
+                logger.info(f"   - Actual Size: {actual_size:,.8f} Contracts (Expected Estimate: {expected_contracts_estimate:,.8f})") 
+                logger.info(f"   - Direction: {expected_direction.upper()}")
+                
+                current_position_size = actual_size
+                entry_price = confirmed_entry_price
+                current_position_details = position_info 
+                
+                profit_loss = position_info.get('unrealized_pnl', 0)
+                send_telegram(
+                    f"🎯 เปิดโพซิชัน {expected_direction.upper()} สำเร็จ\n"
+                    f"📊 ขนาด: {actual_size:,.8f} Contracts\n" 
+                    f"💰 Entry: {confirmed_entry_price:.2f}\n"
+                    f"📈 P&L: {profit_loss:,.2f} USDT"
+                )
+                
+                return True, confirmed_entry_price
             else:
                 logger.warning(f"⚠️ ไม่พบโพซิชันที่ตรงกัน (คาดหวัง: {expected_direction}) หรือไม่พบโพซิชันเลย.")
                 
@@ -677,7 +622,7 @@ def confirm_position_entry(expected_direction: str, expected_contracts: float) -
     send_telegram(
         f"⛔️ Position Confirmation Failed\n"
         f"🔍 กรุณาตรวจสอบโพซิชันใน Exchange ด่วน!\n"
-        f"📊 คาดหวัง: {expected_direction.upper()} {expected_contracts:,.8f} Contracts" 
+        f"📊 คาดหวัง: {expected_direction.upper()} (Estimate: {expected_contracts_estimate:,.8f} Contracts)" 
     )
 
     return False, None
@@ -686,6 +631,61 @@ def confirm_position_entry(expected_direction: str, expected_contracts: float) -
 # ==============================================================================
 # 10. ฟังก์ชันจัดการคำสั่งซื้อขาย (ORDER MANAGEMENT FUNCTIONS)
 # ==============================================================================
+
+# New function to close position immediately via Market Order
+def close_current_position_immediately(current_pos_details: dict):
+    """
+    ปิดโพซิชันที่เปิดอยู่ทันทีด้วย Market Order.
+    ใช้ในกรณีฉุกเฉินหรือเมื่อตั้ง TP/SL ล้มเหลว.
+    """
+    global current_position_details, entry_price, sl_moved, current_position_size
+
+    if not current_pos_details:
+        logger.info("ℹ️ ไม่มีโพซิชันให้ปิด. ไม่จำเป็นต้องดำเนินการ.")
+        return
+
+    logger.warning(f"⚠️ กำลังดำเนินการปิดโพซิชัน {current_pos_details['side'].upper()} ทันที (Emergency Close).")
+    send_telegram(f"🚨 กำลังปิดโพซิชัน {current_pos_details['side'].upper()} ทันที!")
+
+    cancel_all_open_tp_sl_orders() # ยกเลิก TP/SL ที่ค้างอยู่ทั้งหมด
+    time.sleep(1) # รอสักครู่ให้คำสั่งยกเลิกดำเนินการ
+
+    side_to_close = 'sell' if current_pos_details['side'] == 'long' else 'buy'
+    amount_to_close = current_pos_details['size']
+
+    try:
+        logger.info(f"⚡️ ส่งคำสั่ง Market Order เพื่อปิดโพซิชัน {current_pos_details['side'].upper()} ขนาด {amount_to_close:,.8f} Contracts...")
+        close_order = exchange.create_market_order(
+            symbol=SYMBOL,
+            side=side_to_close,
+            amount=amount_to_close,
+            params={
+                'tdMode': 'cross',
+                'posSide': current_pos_details['side'], # ระบุ posSide เพื่อให้ปิดด้านที่ถูกต้อง
+                'reduceOnly': True, # สำคัญมาก: เพื่อให้เป็นคำสั่งปิดเท่านั้น
+            }
+        )
+        logger.info(f"✅ คำสั่งปิดโพซิชันส่งสำเร็จ: ID → {close_order.get('id', 'N/A')}")
+        send_telegram(f"✅ คำสั่งปิดโพซิชัน {current_pos_details['side'].upper()} ส่งสำเร็จ!")
+
+        # หลังจากส่งคำสั่งปิด รอให้ Exchange ประมวลผลและยืนยันว่าโพซิชันปิดแล้ว
+        time.sleep(5) 
+        updated_pos_info = get_current_position()
+        if not updated_pos_info or updated_pos_info.get('size', 0) == 0:
+            logger.info("✅ ยืนยัน: โพซิชันถูกปิดเรียบร้อยแล้ว.")
+            # ให้ monitor_position จัดการเรื่อง PnL และอัปเดตสถานะบอท
+            # เนื่องจาก monitor_position ถูกเรียกหลังจากนี้ เราไม่ต้องรีเซ็ต global vars ตรงๆ
+        else:
+            logger.warning(f"⚠️ โพซิชันยังคงเปิดอยู่หลังจากพยายามปิด: Size {updated_pos_info.get('size', 0):,.8f} Contracts")
+            send_telegram(f"⚠️ โพซิชัน {current_pos_details['side'].upper()} อาจยังไม่ถูกปิดสนิท! (เหลือ: {updated_pos_info.get('size', 0):,.8f} Contracts) โปรดตรวจสอบใน Exchange!")
+
+    except ccxt.BaseError as e:
+        logger.error(f"❌ Error ในการปิดโพซิชันทันที: {str(e)}", exc_info=True)
+        send_telegram(f"⛔️ API Error (Emergency Close): {e.args[0] if e.args else str(e)}\nโปรดตรวจสอบโพซิชันใน Exchange!")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error ในการปิดโพซิชันทันที: {e}", exc_info=True)
+        send_telegram(f"⛔️ Unexpected Error (Emergency Close): {e}\nโปรดตรวจสอบโพซิชันใน Exchange!")
+
 def open_market_order(direction: str, current_price: float) -> tuple[bool, float | None]:
     global current_position_size
 
@@ -697,40 +697,34 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
             logger.error(f"❌ {error_msg}")
             return False, None
 
-        order_amount, estimated_used_margin = calculate_order_details(balance, current_price)
+        order_notional_value, estimated_used_margin = calculate_order_details(balance, current_price)
         
-        if order_amount <= 0:
-            error_msg = "❌ Calculated order amount is zero or insufficient. Cannot open position."
+        if order_notional_value <= 0:
+            error_msg = "❌ Calculated order notional value is zero or insufficient. Cannot open position."
             send_telegram(f"⛔️ Order Calculation Error: {error_msg}")
             logger.error(f"❌ {error_msg}")
             return False, None
         
-        decimal_places = 0
-        if market_info and 'limits' in market_info and 'amount' in market_info['limits'] and 'step' in market_info['limits']['amount'] and market_info['limits']['amount']['step'] is not None:
-            step_size = market_info['limits']['amount']['step']
-            if step_size < 1:
-                decimal_places = int(round(-math.log10(step_size)))
-            
         logger.info(f"ℹ️ Trading Summary:")
         logger.info(f"   - Balance: {balance:,.2f} USDT")
-        logger.info(f"   - Contracts: {order_amount:,.{decimal_places}f}")
+        logger.info(f"   - Notional Value: {order_notional_value:,.2f} USDT") 
         logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + MARGIN_BUFFER_USDT:,.2f} USDT")
         logger.info(f"   - Direction: {direction.upper()}")
         
         side = 'buy' if direction == 'long' else 'sell'
         params = {
-            'tdMode': 'cross', # <--- เพิ่ม tdMode สำหรับ OKX
-            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
+            'tdMode': 'cross', 
+            'posSide': direction, 
         }
 
         order = None
         for attempt in range(3):
-            logger.info(f"⚡️ ส่งคำสั่ง Market Order (Attempt {attempt + 1}/3) - {order_amount:,.{decimal_places}f} Contracts")
+            logger.info(f"⚡️ ส่งคำสั่ง Market Order (Attempt {attempt + 1}/3) - {order_notional_value:,.2f} USDT Notional") 
             try:
                 order = exchange.create_market_order(
                     symbol=SYMBOL,
                     side=side,
-                    amount=order_amount,
+                    amount=order_notional_value, 
                     params=params
                 )
                 
@@ -763,7 +757,17 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
             send_telegram("⛔️ Order Failed: ล้มเหลวในการส่งออเดอร์หลังจาก 3 ครั้ง")
             return False, None
         
-        return confirm_position_entry(direction, order_amount)
+        # คำนวณ expected_contracts_estimate จาก Notional เพื่อส่งให้ confirm_position_entry
+        okx_btc_contract_size_in_btc = 0.0001 
+
+        if okx_btc_contract_size_in_btc == 0:
+            logger.error("❌ OKX BTC Contract Size is 0. Cannot estimate expected contracts.")
+            expected_contracts_estimate = 0.0
+        else:
+            expected_contracts_estimate = order_notional_value / (current_price * okx_btc_contract_size_in_btc)
+            expected_contracts_estimate = exchange.amount_to_precision(SYMBOL, expected_contracts_estimate) 
+
+        return confirm_position_entry(direction, float(expected_contracts_estimate)) 
         
     except Exception as e:
         logger.error(f"❌ Critical Error in open_market_order: {e}", exc_info=True)
@@ -778,17 +782,15 @@ def cancel_all_open_tp_sl_orders():
     """ยกเลิกคำสั่ง TP/SL ที่ค้างอยู่สำหรับ Symbol ปัจจุบันบน OKX Futures/Swap."""
     logger.info(f"⏳ Checking for and canceling open TP/SL orders for {SYMBOL}...")
     try:
-        # OKX Algo Orders (TP/SL) have ordType='conditional' and algoOrdType='sl' or 'tp'
         open_algo_orders = exchange.fetch_open_orders(SYMBOL, params={'ordType': 'conditional'})
         
         canceled_count = 0
         for order in open_algo_orders:
-            # Check if it's a live TP/SL order for our symbol
             if order.get('info', {}).get('instId') == SYMBOL and \
                order.get('info', {}).get('state') == 'live' and \
                order.get('info', {}).get('algoOrdType') in ['sl', 'tp']:
                 try:
-                    exchange.cancel_order(order['id'], SYMBOL, params={'ordType': 'conditional'}) # OKX needs ordType for cancelling conditional
+                    exchange.cancel_order(order['id'], SYMBOL, params={'ordType': 'conditional'}) 
                     logger.info(f"✅ Canceled old TP/SL order: ID {order['id']}, Type: {order['type']}, AlgoType: {order.get('info',{}).get('algoOrdType')}")
                     canceled_count += 1
                 except ccxt.OrderNotFound:
@@ -812,7 +814,7 @@ def cancel_all_open_tp_sl_orders():
         send_telegram(f"⛔️ Unexpected Error: ไม่สามารถยกเลิก TP/SL เก่าได้\nรายละเอียด: {e}")
 
 
-def set_tpsl_for_position(direction: str, entry_price: float, current_market_price: float) -> bool: # <-- เพิ่ม current_market_price
+def set_tpsl_for_position(direction: str, entry_price: float, current_market_price: float) -> bool: 
     global current_position_size
 
     if not current_position_size:
@@ -820,7 +822,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         send_telegram("⛔️ Error: ไม่สามารถตั้ง TP/SL ได้ (ขนาดโพซิชันเป็น 0).")
         return False
 
-    cancel_all_open_tp_sl_orders()
+    cancel_all_open_tp_sl_orders() # ถูกเรียกในฟังก์ชันนี้อยู่แล้วก่อนตั้ง TP/SL ใหม่
     time.sleep(1) 
 
     tp_price_raw = 0.0 
@@ -844,23 +846,22 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
     try:
         tp_sl_side = 'sell' if direction == 'long' else 'buy'
         
-        # OKX TP/SL orders use 'triggerPrice' and need 'tdMode' and 'posSide'
         common_params = {
             'tdMode': 'cross',
-            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
-            'reduceOnly': True, # Important for closing position
+            'posSide': direction, 
+            'reduceOnly': True, 
         }
 
         logger.info(f"⏳ Setting Take Profit order at {tp_price:.2f}...")
         tp_order = exchange.create_order(
             symbol=SYMBOL,
-            type='TAKE_PROFIT_MARKET', # OKX uses TAKE_PROFIT_MARKET/STOP_LOSS_MARKET
+            type='TAKE_PROFIT_MARKET', 
             side=tp_sl_side,
-            amount=current_position_size, # Contracts quantity
-            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
+            amount=current_position_size, 
+            price=current_market_price, 
             params={
-                'triggerPrice': tp_price, # OKX uses triggerPrice
-                **common_params, # Merge common params
+                'triggerPrice': tp_price, 
+                **common_params, 
             }
         )
         logger.info(f"✅ Take Profit order placed: ID → {tp_order.get('id', 'N/A')}")
@@ -868,13 +869,13 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         logger.info(f"⏳ Setting Stop Loss order at {sl_price:.2f}...")
         sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
+            type='STOP_LOSS_MARKET', 
             side=tp_sl_side,         
             amount=current_position_size,         
-            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
+            price=current_market_price, 
             params={
-                'triggerPrice': sl_price, # OKX uses triggerPrice
-                **common_params, # Merge common params
+                'triggerPrice': sl_price, 
+                **common_params, 
             }
         )
         logger.info(f"✅ Stop Loss order placed: ID → {sl_order.get('id', 'N/A')}")
@@ -891,7 +892,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         return False
 
 
-def move_sl_to_breakeven(direction: str, entry_price: float, current_market_price: float) -> bool: # <-- เพิ่ม current_market_price
+def move_sl_to_breakeven(direction: str, entry_price: float, current_market_price: float) -> bool: 
     """เลื่อน Stop Loss ไปที่จุด Breakeven (หรือ +BE_SL_BUFFER_POINTS) บน OKX Futures/Swap."""
     global sl_moved, current_position_size
 
@@ -910,24 +911,23 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
         breakeven_sl_price_raw = entry_price - BE_SL_BUFFER_POINTS
     
     breakeven_sl_price_str = exchange.price_to_precision(SYMBOL, breakeven_sl_price_raw)
-    breakeven_sl_price = float(breakeven_sl_price_str) # แปลงเป็น float
+    breakeven_sl_price = float(breakeven_sl_price_str) 
 
     try:
         logger.info("⏳ กำลังยกเลิกคำสั่ง Stop Loss เก่า...")
-        # OKX Algo Orders (TP/SL) have ordType='conditional' and algoOrdType='sl' or 'tp'
         open_algo_orders = exchange.fetch_open_orders(SYMBOL, params={'ordType': 'conditional'})
         
         sl_order_ids_to_cancel = []
         for order in open_algo_orders:
             if order.get('info', {}).get('instId') == SYMBOL and \
                order.get('info', {}).get('state') == 'live' and \
-               order.get('info', {}).get('algoOrdType') == 'sl': # Specifically target SL algo order
+               order.get('info', {}).get('algoOrdType') == 'sl': 
                 sl_order_ids_to_cancel.append(order['id'])
         
         if sl_order_ids_to_cancel:
             for sl_id in sl_order_ids_to_cancel:
                 try:
-                    exchange.cancel_order(sl_id, SYMBOL, params={'ordType': 'conditional'}) # OKX needs ordType for cancelling conditional
+                    exchange.cancel_order(sl_id, SYMBOL, params={'ordType': 'conditional'}) 
                     logger.info(f"✅ ยกเลิก SL Order ID {sl_id} สำเร็จ.")
                 except ccxt.OrderNotFound:
                     logger.info(f"💡 Order {sl_id} not found or already canceled/filled. No action needed.")
@@ -940,22 +940,21 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
 
         new_sl_side = 'sell' if direction == 'long' else 'buy'
         
-        # OKX SL order parameters
         new_sl_params = {
             'tdMode': 'cross',
-            'posSide': direction, # <--- เพิ่ม posSide สำหรับ OKX (Long/Short) - **หากเป็น Net Mode ให้คอมเมนต์ออก**
+            'posSide': direction, 
             'reduceOnly': True,
         }
 
         logger.info(f"⏳ Setting new Stop Loss (Breakeven) order at {breakeven_sl_price:.2f}...")
         new_sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET', # OKX uses STOP_LOSS_MARKET
+            type='STOP_LOSS_MARKET', 
             side=new_sl_side,
             amount=current_position_size, 
-            price=current_market_price, # <-- แก้ไข: ใช้ราคาปัจจุบันเป็น 'orderPx'
+            price=current_market_price, 
             params={
-                'triggerPrice': breakeven_sl_price, # OKX uses triggerPrice
+                'triggerPrice': breakeven_sl_price,
                 **new_sl_params,
             }
         )
@@ -986,41 +985,45 @@ def monitor_position(pos_info: dict | None, current_price: float):
 
     logger.debug(f"🔄 กำลังตรวจสอบสถานะโพซิชัน: Pos_Info={pos_info}, Current_Price={current_price}")
     
+    # ถ้าโพซิชันปิดไปแล้ว (pos_info เป็น None) และเราเคยมีโพซิชันอยู่ (current_position_details ไม่ใช่ None)
     if not pos_info and current_position_details:
         logger.info(f"ℹ️ โพซิชัน {current_position_details['side'].upper()} ถูกปิดแล้วใน Exchange.")
 
         closed_price = current_price
         pnl_usdt_actual = 0.0
 
-        if entry_price and current_position_size:
+        # คำนวณ PnL โดยใช้ Contract Size ที่ถูกต้อง (0.0001 BTC ต่อ Contract)
+        okx_btc_contract_size_in_btc = 0.0001 
+        if entry_price and current_position_size and okx_btc_contract_size_in_btc > 0:
             if current_position_details['side'] == 'long':
-                pnl_usdt_actual = (closed_price - entry_price) * current_position_size
+                pnl_usdt_actual = (closed_price - entry_price) * current_position_size * okx_btc_contract_size_in_btc
             else: 
-                pnl_usdt_actual = (entry_price - closed_price) * current_position_size
+                pnl_usdt_actual = (entry_price - closed_price) * current_position_size * okx_btc_contract_size_in_btc
 
         close_reason = "ปิดโดยไม่ทราบสาเหตุ"
         emoji = "❓"
 
-        tp_sl_be_tolerance_points = entry_price * TP_SL_BE_PRICE_TOLERANCE_PERCENT if entry_price else 0
+        tp_sl_be_price_tolerance_points = entry_price * TP_SL_BE_PRICE_TOLERANCE_PERCENT if entry_price else 0
 
+        # ตรวจสอบสาเหตุการปิด
         if current_position_details['side'] == 'long' and entry_price:
-            if closed_price >= (entry_price + TP_DISTANCE_POINTS) - tp_sl_be_tolerance_points:
+            if closed_price >= (entry_price + TP_DISTANCE_POINTS) - tp_sl_be_price_tolerance_points:
                 close_reason = "TP"
                 emoji = "✅"
-            elif sl_moved and abs(closed_price - (entry_price + BE_SL_BUFFER_POINTS)) <= tp_sl_be_tolerance_points:
+            elif sl_moved and abs(closed_price - (entry_price + BE_SL_BUFFER_POINTS)) <= tp_sl_be_price_tolerance_points:
                  close_reason = "SL (กันทุน)"
                  emoji = "🛡️"
-            elif closed_price <= (entry_price - SL_DISTANCE_POINTS) + tp_sl_be_tolerance_points:
+            elif closed_price <= (entry_price - SL_DISTANCE_POINTS) + tp_sl_be_price_tolerance_points:
                 close_reason = "SL"
                 emoji = "❌"
         elif current_position_details['side'] == 'short' and entry_price:
-            if closed_price <= (entry_price - TP_DISTANCE_POINTS) + tp_sl_be_tolerance_points:
+            if closed_price <= (entry_price - TP_DISTANCE_POINTS) + tp_sl_be_price_tolerance_points:
                 close_reason = "TP"
                 emoji = "✅"
-            elif sl_moved and abs(closed_price - (entry_price - BE_SL_BUFFER_POINTS)) <= tp_sl_be_tolerance_points:
+            elif sl_moved and abs(closed_price - (entry_price - BE_SL_BUFFER_POINTS)) <= tp_sl_be_price_tolerance_points:
                  close_reason = "SL (กันทุน)"
                  emoji = "🛡️"
-            elif closed_price >= (entry_price + SL_DISTANCE_POINTS) - tp_sl_be_tolerance_points:
+            elif closed_price >= (entry_price + SL_DISTANCE_POINTS) - tp_sl_be_price_tolerance_points:
                 close_reason = "SL"
                 emoji = "❌"
         
@@ -1028,6 +1031,7 @@ def monitor_position(pos_info: dict | None, current_price: float):
         logger.info(f"✅ โพซิชันปิด: {close_reason}, PnL (ประมาณ): {pnl_usdt_actual:.2f}")
         add_trade_result(close_reason, pnl_usdt_actual) 
 
+        # รีเซ็ตสถานะโพซิชันของบอท
         current_position_details = None
         entry_price = None
         current_position_size = 0.0
@@ -1035,17 +1039,18 @@ def monitor_position(pos_info: dict | None, current_price: float):
         last_ema_position_status = None 
         save_monthly_stats()
 
-        cancel_all_open_tp_sl_orders() # <--- ตรงนี้จะยกเลิกคำสั่งที่ค้างอยู่หลังจากปิดโพซิชัน
+        # NOTE: การเรียก cancel_all_open_tp_sl_orders() ถูกย้ายไปที่ท้ายสุดของฟังก์ชันนี้แล้ว
 
         return
 
+    # ถ้ายังมีโพซิชันเปิดอยู่
     if pos_info:
         current_position_details = pos_info 
         entry_price = pos_info['entry_price']
         unrealized_pnl = pos_info['unrealized_pnl']
-        current_position_size = pos_info['size']
+        current_position_size = pos_info['size'] 
 
-        logger.info(f"📊 สถานะปัจจุบัน: {current_position_details['side'].upper()}, PnL: {unrealized_pnl:,.2f} USDT, ราคา: {current_price:,.1f}, เข้า: {entry_price:,.1f}, Size: {current_position_size:,.8f} Contracts")
+        logger.info(f"📊 สถานะปัจจุบัน: {current_position_details['side'].upper()}, PnL: {unrealized_pnl:,.2f} USDT, ราคา: {current_price:,.1f}, เข้า: {entry_price:,.1f}, Size: {current_position_size:,.0f} Contracts") 
 
         pnl_in_points = 0
         if current_position_details['side'] == 'long':
@@ -1055,8 +1060,12 @@ def monitor_position(pos_info: dict | None, current_price: float):
 
         if not sl_moved and pnl_in_points >= BE_PROFIT_TRIGGER_POINTS:
             logger.info(f"ℹ️ กำไรถึงจุดเลื่อน SL: {pnl_in_points:,.0f} จุด (PnL: {unrealized_pnl:,.2f} USDT)")
-            # <-- แก้ไข: ส่ง current_price ไปยัง move_sl_to_breakeven
             move_sl_to_breakeven(current_position_details['side'], entry_price, current_price)
+
+    # <-- สำคัญ: ย้ายการเรียก cancel_all_open_tp_sl_orders() มาที่นี่
+    # เพื่อให้แน่ใจว่าถูกเรียกในทุกๆ รอบการตรวจสอบโพซิชัน (ทุก MAIN_LOOP_SLEEP_SECONDS)
+    # ไม่ว่าจะตรวจพบโพซิชันหรือไม่ก็ตาม เพื่อยกเลิกคำสั่งที่ค้างอยู่โดยเร็วที่สุด
+    cancel_all_open_tp_sl_orders() 
 
 # ==============================================================================
 # 13. ฟังก์ชันรายงานประจำเดือน (MONTHLY REPORT FUNCTIONS)
@@ -1224,7 +1233,6 @@ def main():
                 time.sleep(ERROR_RETRY_SLEEP_SECONDS)
                 continue
             
-            # ส่ง current_price เข้าไปใน monitor_position
             monitor_position(current_pos_info, current_price)
 
             if not current_pos_info: 
@@ -1238,7 +1246,6 @@ def main():
                     market_order_success, confirmed_entry_price = open_market_order(signal, current_price)
 
                     if market_order_success and confirmed_entry_price:
-                        # <-- แก้ไข: ส่ง current_price ไปยัง set_tpsl_for_position
                         set_tpsl_success = set_tpsl_for_position(signal, confirmed_entry_price, current_price)
 
                         if set_tpsl_success:
@@ -1246,6 +1253,8 @@ def main():
                         else:
                             logger.error(f"❌ เปิดออเดอร์ {signal.upper()} ได้ แต่ตั้ง TP/SL ไม่สำเร็จ. กรุณาตรวจสอบและปิดออเดอร์ด้วยตนเอง!")
                             send_telegram(f"⛔️ <b>ข้อผิดพลาดร้ายแรง:</b> เปิดออเดอร์ {signal.upper()} ได้ แต่ตั้ง TP/SL ไม่สำเร็จ. โพซิชันไม่มี SL/TP! โปรดจัดการด้วยตนเอง!")
+                            if current_position_details: 
+                                close_current_position_immediately(current_position_details)
                     else:
                         logger.warning(f"⚠️ ไม่สามารถเปิด Market Order {signal.upper()} ได้.")
                 else:
@@ -1276,4 +1285,5 @@ def main():
 # ==============================================================================
 if __name__ == '__main__':
     main()
+
 
