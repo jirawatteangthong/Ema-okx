@@ -22,7 +22,7 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
+TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
 LEVERAGE = 30    # อัปเดต Leverage ตามที่คุณตั้ง
 TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
@@ -618,15 +618,21 @@ def confirm_position_entry(direction: str, expected_contracts_estimate: float) -
     """
     ยืนยันว่าโพซิชันถูกเปิดสำเร็จ และดึง Entry Price จริง.
     """
+    global current_position_details, entry_price, current_position_size # <-- เพิ่ม current_position_size ที่นี่
+
     for i in range(CONFIRMATION_RETRIES):
         logger.info(f"⏳ กำลังยืนยันโพซิชัน (Attempt {i+1}/{CONFIRMATION_RETRIES})...")
         pos = get_current_position()
         if pos:
-            # OKX 'pos' field from fetch_positions already gives absolute amount
             actual_pos_size = pos['size']
             
             # ตรวจสอบว่าขนาดโพซิชันที่เปิดอยู่ใกล้เคียงกับที่เราคาดหวังหรือไม่
             if abs(actual_pos_size - expected_contracts_estimate) / expected_contracts_estimate < 0.05: # 5% tolerance
+                # *** อัปเดต Global Variables ทันทีที่ยืนยันโพซิชันสำเร็จ ***
+                current_position_details = pos
+                entry_price = pos['entry_price']
+                current_position_size = actual_pos_size # <--- อัปเดตตรงนี้เลย
+                
                 logger.info(f"✅ โพซิชัน {pos['side'].upper()} ยืนยันสำเร็จ. Entry Price: {pos['entry_price']:.2f}, Size: {actual_pos_size:.8f} Contracts")
                 return True, pos['entry_price']
             else:
@@ -825,7 +831,7 @@ def cancel_all_open_tp_sl_orders():
 
 
 def set_tpsl_for_position(direction: str, entry_price: float, current_market_price: float) -> bool: 
-    global current_position_size
+    global current_position_size # <-- ตรวจสอบให้แน่ใจว่า current_position_size เป็น global
 
     if not current_position_size:
         logger.error("❌ ไม่สามารถตั้ง TP/SL ได้: ขนาดโพซิชันเป็น 0.")
@@ -862,7 +868,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
             'reduceOnly': True, 
         }
 
-        logger.info(f"⏳ Setting Take Profit order at {tp_price:.2f}...")
+        logger.info(f"⏳ Setting Take Profit order at {tp_price:.2f} with size {current_position_size:,.8f} contracts...")
         tp_order = exchange.create_order(
             symbol=SYMBOL,
             type='TAKE_PROFIT_MARKET', 
@@ -876,7 +882,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         )
         logger.info(f"✅ Take Profit order placed: ID → {tp_order.get('id', 'N/A')}")
 
-        logger.info(f"⏳ Setting Stop Loss order at {sl_price:.2f}...")
+        logger.info(f"⏳ Setting Stop Loss order at {sl_price:.2f} with size {current_position_size:,.8f} contracts...")
         sl_order = exchange.create_order(
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
@@ -904,7 +910,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
 
 def move_sl_to_breakeven(direction: str, entry_price: float, current_market_price: float) -> bool: 
     """เลื่อน Stop Loss ไปที่จุด Breakeven (หรือ +BE_SL_BUFFER_POINTS) บน OKX Futures/Swap."""
-    global sl_moved, current_position_size
+    global sl_moved, current_position_size # <-- ตรวจสอบให้แน่ใจว่า current_position_size เป็น global
 
     if sl_moved:
         logger.info("ℹ️ SL ถูกเลื่อนไปที่กันทุนแล้ว ไม่จำเป็นต้องเลื่อนอีก.")
@@ -956,7 +962,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
             'reduceOnly': True,
         }
 
-        logger.info(f"⏳ Setting new Stop Loss (Breakeven) order at {breakeven_sl_price:.2f}...")
+        logger.info(f"⏳ Setting new Stop Loss (Breakeven) order at {breakeven_sl_price:.2f} with size {current_position_size:,.8f} contracts...")
         new_sl_order = exchange.create_order(
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
@@ -1046,7 +1052,7 @@ def monitor_position(pos_info: dict | None, current_price: float):
         # รีเซ็ตสถานะโพซิชันของบอท
         current_position_details = None
         entry_price = None
-        current_position_size = 0.0
+        current_position_size = 0.0 # <--- รีเซ็ตตรงนี้เมื่อโพซิชันปิด
         sl_moved = False
         last_ema_position_status = None 
         save_monthly_stats()
@@ -1060,7 +1066,9 @@ def monitor_position(pos_info: dict | None, current_price: float):
         current_position_details = pos_info 
         entry_price = pos_info['entry_price']
         unrealized_pnl = pos_info['unrealized_pnl']
-        current_position_size = pos_info['size'] 
+        current_position_size = pos_info['size'] # <--- อัปเดตตรงนี้เมื่อโพซิชันเปิดอยู่
+        # เมื่อ monitor_position ถูกเรียก และพบ pos_info, มันจะอัปเดต current_position_size ให้
+        # แต่ในกรณีที่เพิ่งเปิดออเดอร์ในรอบเดียวกัน confirm_position_entry จะอัปเดตก่อนหน้านี้แล้ว
 
         logger.info(f"📊 สถานะปัจจุบัน: {current_position_details['side'].upper()}, PnL: {unrealized_pnl:,.2f} USDT, ราคา: {current_price:,.1f}, เข้า: {entry_price:,.1f}, Size: {current_position_size:,.0f} Contracts") 
 
@@ -1258,6 +1266,7 @@ def main():
                     market_order_success, confirmed_entry_price = open_market_order(signal, current_price)
 
                     if market_order_success and confirmed_entry_price:
+                        # ณ จุดนี้ current_position_details, entry_price, current_position_size ถูกอัปเดตแล้วใน confirm_position_entry
                         set_tpsl_success = set_tpsl_for_position(signal, confirmed_entry_price, current_price)
 
                         if set_tpsl_success:
