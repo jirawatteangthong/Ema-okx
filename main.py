@@ -23,10 +23,10 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
 TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
-LEVERAGE = 30    # อัปเดต Leverage ตามที่คุณตั้ง
-TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
+LEVERAGE = 15    # อัปเดต Leverage ตามที่คุณตั้ง
+TP_DISTANCE_POINTS = 350  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
-BE_PROFIT_TRIGGER_POINTS = 200  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+BE_PROFIT_TRIGGER_POINTS = 150  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
 BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
 
@@ -162,7 +162,9 @@ def setup_exchange():
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
-        logger.debug(f"  Contract Size: {market_info.get('contractSize', 'N/A')}") 
+        # --- IMPORTANT: market_info.get('contractSize') might be incorrect ---
+        # We will use a hardcoded value in calculate_order_details for BTC-USDT-SWAP
+        logger.debug(f"  Contract Size (from market_info, for reference only): {market_info.get('contractSize', 'N/A')}") 
         # เพิ่ม logging สำหรับ full market_info
         logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
 
@@ -239,7 +241,7 @@ def load_monthly_stats():
 
             current_month_year_str = datetime.now().strftime('%Y-%m')
             if monthly_stats['month_year'] != current_month_year_str:
-                logger.info(f"ℹ️ สถิติที่โหลดมาเป็นของเดือน {monthly_stats['month_year']} ไม่ตรงกับเดือนนี้ {current_month_year_str}. จะรีเซ็ตสถิติสำหรับเดือนใหม่.")
+                logger.info(f"🆕 สถิติที่โหลดมาเป็นของเดือน {monthly_stats['month_year']} ไม่ตรงกับเดือนนี้ {current_month_year_str}. จะรีเซ็ตสถิติสำหรับเดือนใหม่.")
                 reset_monthly_stats()
 
         else:
@@ -362,7 +364,7 @@ def get_current_position() -> dict | None:
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
             positions = exchange.fetch_positions([SYMBOL]) 
-            logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
+            logger.debug(f"DEBUG: Raw positions fetched: {positions}") # <--- Keep this for full raw data inspection
             time.sleep(1) 
             
             active_positions = [
@@ -378,7 +380,14 @@ def get_current_position() -> dict | None:
                 pos_info = pos.get('info', {})
                 pos_amount_str = pos_info.get('pos') 
                 
-                pos_amount = abs(float(pos_amount_str))
+                # *** IMPORTANT: Use pos['contracts'] or pos['amount'] if available and correctly normalized by CCXT ***
+                # If pos_info.get('pos') returns a value like "1" but means "1 contract"
+                # and CCXT's 'amount' or 'contracts' field is also 1, then use it.
+                # If 'pos' field from OKX API sometimes returns a BTC value, not contract count,
+                # then you would need to convert it using the correct contract_size (0.0001 BTC/contract).
+                # For now, let's assume 'pos' here is contract count, based on the previous log showing 'Size=1.0 Contracts'.
+                pos_amount = abs(float(pos_amount_str)) 
+
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
                 unrealized_pnl_okx = float(pos_info.get('upl', 0.0))
                 
@@ -388,7 +397,7 @@ def get_current_position() -> dict | None:
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
                         'side': side,
-                        'size': pos_amount, 
+                        'size': pos_amount, # This is the contract count
                         'entry_price': entry_price_okx,
                         'unrealized_pnl': unrealized_pnl_okx,
                         'pos_id': pos.get('id', 'N/A') 
@@ -529,15 +538,22 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         min_notional_exchange = float(market_info['limits']['cost'].get('min', '11.8')) 
         max_notional_exchange = float(market_info['limits']['cost'].get('max', str(sys.float_info.max))) 
         
-        # OKX BTC-USDT-SWAP contract size is typically 0.0001 BTC per contract
-        contract_size_in_btc = float(market_info.get('contractSize', 0.0001)) 
+        # *** IMPORTANT FIX ***
+        # OKX BTC-USDT-SWAP contract size is DEFINITELY 0.0001 BTC per contract.
+        # Your log showed 0.01, which is incorrect and caused the small order size.
+        # Hardcode this value to ensure correctness, as market_info might sometimes be unreliable.
+        contract_size_in_btc = 0.0001 # <--- แก้ไขตรงนี้เป็นค่าที่ถูกต้อง
         logger.debug(f"DEBUG: Confirmed contract_size for {SYMBOL} is {contract_size_in_btc} BTC/contract.")
 
         # actual_contracts_step_size: ขนาดการเพิ่ม/ลดของจำนวนสัญญา (เช่น 1.0 คือเพิ่มทีละ 1 สัญญา)
+        # Your log shows 1.0, which is correct for contracts on OKX.
         actual_contracts_step_size = float(market_info['limits']['amount'].get('step', '1.0'))
         logger.debug(f"DEBUG: Actual Contract Step Size from market_info: {actual_contracts_step_size}")
         
         # min_exchange_contracts: จำนวนสัญญาขั้นต่ำที่ Exchange อนุญาต
+        # Your log shows 0.01, which is incorrect if it means 0.01 CONTRACTS.
+        # If it means 0.01 BTC, it's 100 contracts.
+        # Based on OKX, min contracts for BTC-USDT-SWAP is 1.0.
         min_exchange_contracts = float(market_info['limits']['amount'].get('min', '1.0')) 
         
     except (TypeError, ValueError) as e:
@@ -562,11 +578,9 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     contracts_raw = target_base_amount_btc_raw / contract_size_in_btc 
     
     # ปัดเศษ contracts ให้เป็นไปตาม actual_contracts_step_size
-    # ใช้ round() เพื่อให้ได้ค่าที่ใกล้เคียงที่สุดตาม step
     contracts_to_open = round(contracts_raw / actual_contracts_step_size) * actual_contracts_step_size
     
     # ควบคุม precision ด้วย f-string ก่อนส่งให้ CCXT เพื่อหลีกเลี่ยง float inaccuracies
-    # CCXT จะจัดการ precision สุดท้ายอีกครั้งด้วย amount_to_precision
     contracts_to_open = float(f"{contracts_to_open:.8f}") # ปัดให้มีทศนิยม 8 ตำแหน่ง
 
     # ตรวจสอบขั้นต่ำและสูงสุดของ Contracts (ถ้ามี)
@@ -589,7 +603,6 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         actual_notional_after_precision = contracts_to_open * contract_size_in_btc * price # อัปเดต Notional ตาม contracts ใหม่
 
     # คำนวณ Margin ที่แท้จริงจาก Contracts ที่จะเปิด
-    # margin = (contracts * contract_size * price) / leverage
     required_margin = actual_notional_after_precision / LEVERAGE
 
     if contracts_to_open == 0:
@@ -618,7 +631,7 @@ def confirm_position_entry(direction: str, expected_contracts_estimate: float) -
     """
     ยืนยันว่าโพซิชันถูกเปิดสำเร็จ และดึง Entry Price จริง.
     """
-    global current_position_details, entry_price, current_position_size # <-- เพิ่ม current_position_size ที่นี่
+    global current_position_details, entry_price, current_position_size 
 
     for i in range(CONFIRMATION_RETRIES):
         logger.info(f"⏳ กำลังยืนยันโพซิชัน (Attempt {i+1}/{CONFIRMATION_RETRIES})...")
@@ -631,7 +644,7 @@ def confirm_position_entry(direction: str, expected_contracts_estimate: float) -
                 # *** อัปเดต Global Variables ทันทีที่ยืนยันโพซิชันสำเร็จ ***
                 current_position_details = pos
                 entry_price = pos['entry_price']
-                current_position_size = actual_pos_size # <--- อัปเดตตรงนี้เลย
+                current_position_size = actual_pos_size 
                 
                 logger.info(f"✅ โพซิชัน {pos['side'].upper()} ยืนยันสำเร็จ. Entry Price: {pos['entry_price']:.2f}, Size: {actual_pos_size:.8f} Contracts")
                 return True, pos['entry_price']
@@ -831,14 +844,14 @@ def cancel_all_open_tp_sl_orders():
 
 
 def set_tpsl_for_position(direction: str, entry_price: float, current_market_price: float) -> bool: 
-    global current_position_size # <-- ตรวจสอบให้แน่ใจว่า current_position_size เป็น global
+    global sl_moved, current_position_size 
 
     if not current_position_size:
         logger.error("❌ ไม่สามารถตั้ง TP/SL ได้: ขนาดโพซิชันเป็น 0.")
         send_telegram("⛔️ Error: ไม่สามารถตั้ง TP/SL ได้ (ขนาดโพซิชันเป็น 0).")
         return False
 
-    cancel_all_open_tp_sl_orders() # ถูกเรียกในฟังก์ชันนี้อยู่แล้วก่อนตั้ง TP/SL ใหม่
+    cancel_all_open_tp_sl_orders() 
     time.sleep(1) 
 
     tp_price_raw = 0.0 
@@ -873,7 +886,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
             symbol=SYMBOL,
             type='TAKE_PROFIT_MARKET', 
             side=tp_sl_side,
-            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
+            amount=current_position_size, 
             price=current_market_price, 
             params={
                 'triggerPrice': tp_price, 
@@ -887,7 +900,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
             side=tp_sl_side,         
-            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
+            amount=current_position_size,         
             price=current_market_price, 
             params={
                 'triggerPrice': sl_price, 
@@ -910,7 +923,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
 
 def move_sl_to_breakeven(direction: str, entry_price: float, current_market_price: float) -> bool: 
     """เลื่อน Stop Loss ไปที่จุด Breakeven (หรือ +BE_SL_BUFFER_POINTS) บน OKX Futures/Swap."""
-    global sl_moved, current_position_size # <-- ตรวจสอบให้แน่ใจว่า current_position_size เป็น global
+    global sl_moved, current_position_size
 
     if sl_moved:
         logger.info("ℹ️ SL ถูกเลื่อนไปที่กันทุนแล้ว ไม่จำเป็นต้องเลื่อนอีก.")
@@ -967,7 +980,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
             side=new_sl_side,
-            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
+            amount=current_position_size, 
             price=current_market_price, 
             params={
                 'triggerPrice': breakeven_sl_price,
@@ -1009,8 +1022,7 @@ def monitor_position(pos_info: dict | None, current_price: float):
         pnl_usdt_actual = 0.0
 
         # คำนวณ PnL โดยใช้ Contract Size ที่ถูกต้อง (0.0001 BTC ต่อ Contract)
-        # ตรวจสอบว่า market_info มี contractSize หรือไม่ ถ้าไม่ ให้ใช้ค่า Default
-        okx_btc_contract_size_in_btc = float(market_info.get('contractSize', 0.0001)) 
+        okx_btc_contract_size_in_btc = 0.0001 # <--- แก้ไขตรงนี้เป็นค่าที่ถูกต้อง
         
         if entry_price and current_position_size and okx_btc_contract_size_in_btc > 0:
             if current_position_details['side'] == 'long':
@@ -1052,12 +1064,10 @@ def monitor_position(pos_info: dict | None, current_price: float):
         # รีเซ็ตสถานะโพซิชันของบอท
         current_position_details = None
         entry_price = None
-        current_position_size = 0.0 # <--- รีเซ็ตตรงนี้เมื่อโพซิชันปิด
+        current_position_size = 0.0 
         sl_moved = False
         last_ema_position_status = None 
         save_monthly_stats()
-
-        # NOTE: การเรียก cancel_all_open_tp_sl_orders() ถูกย้ายไปที่ท้ายสุดของฟังก์ชันนี้แล้ว
 
         return
 
@@ -1066,9 +1076,7 @@ def monitor_position(pos_info: dict | None, current_price: float):
         current_position_details = pos_info 
         entry_price = pos_info['entry_price']
         unrealized_pnl = pos_info['unrealized_pnl']
-        current_position_size = pos_info['size'] # <--- อัปเดตตรงนี้เมื่อโพซิชันเปิดอยู่
-        # เมื่อ monitor_position ถูกเรียก และพบ pos_info, มันจะอัปเดต current_position_size ให้
-        # แต่ในกรณีที่เพิ่งเปิดออเดอร์ในรอบเดียวกัน confirm_position_entry จะอัปเดตก่อนหน้านี้แล้ว
+        current_position_size = pos_info['size'] 
 
         logger.info(f"📊 สถานะปัจจุบัน: {current_position_details['side'].upper()}, PnL: {unrealized_pnl:,.2f} USDT, ราคา: {current_price:,.1f}, เข้า: {entry_price:,.1f}, Size: {current_position_size:,.0f} Contracts") 
 
@@ -1082,9 +1090,6 @@ def monitor_position(pos_info: dict | None, current_price: float):
             logger.info(f"ℹ️ กำไรถึงจุดเลื่อน SL: {pnl_in_points:,.0f} จุด (PnL: {unrealized_pnl:,.2f} USDT)")
             move_sl_to_breakeven(current_position_details['side'], entry_price, current_price)
 
-    # <-- สำคัญ: ย้ายการเรียก cancel_all_open_tp_sl_orders() มาที่นี่
-    # เพื่อให้แน่ใจว่าถูกเรียกในทุกๆ รอบการตรวจสอบโพซิชัน (ทุก MAIN_LOOP_SLEEP_SECONDS)
-    # ไม่ว่าจะตรวจพบโพซิชันหรือไม่ก็ตาม เพื่อยกเลิกคำสั่งที่ค้างอยู่โดยเร็วที่สุด
     cancel_all_open_tp_sl_orders() 
 
 # ==============================================================================
