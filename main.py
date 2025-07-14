@@ -31,7 +31,7 @@ BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
-MARGIN_BUFFER_USDT = 5 
+MARGIN_BUFFER_USDT = 15 # <--- เพิ่มบัฟเฟอร์ให้มากขึ้นเพื่อครอบคลุมค่าธรรมเนียมและความผันผวน
 TARGET_POSITION_SIZE_FACTOR = 0.8  # อัปเดตตามที่คุณต้องการ
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
@@ -134,6 +134,7 @@ def setup_exchange():
         if not market_info:
             raise ValueError(f"ไม่พบข้อมูลตลาดสำหรับสัญลักษณ์ {SYMBOL}")
         
+        # ตรวจสอบและกำหนดค่าเริ่มต้นสำหรับ limits ที่อาจไม่มี
         if 'limits' not in market_info:
             market_info['limits'] = {}
         if 'amount' not in market_info['limits']:
@@ -141,15 +142,17 @@ def setup_exchange():
         if 'cost' not in market_info['limits']:
             market_info['limits']['cost'] = {}
 
+        # ดึงค่า step, min, max สำหรับ amount (contracts)
         amount_step = market_info['limits']['amount'].get('step')
-        market_info['limits']['amount']['step'] = float(amount_step) if amount_step is not None else 0.001
-
+        market_info['limits']['amount']['step'] = float(amount_step) if amount_step is not None else 1.0 # Default to 1.0 contract step for OKX
+        
         amount_min = market_info['limits']['amount'].get('min')
-        market_info['limits']['amount']['min'] = float(amount_min) if amount_min is not None else 0.001
+        market_info['limits']['amount']['min'] = float(amount_min) if amount_min is not None else 1.0 # Default to 1.0 minimum contract
         
         amount_max = market_info['limits']['amount'].get('max')
         market_info['limits']['amount']['max'] = float(amount_max) if amount_max is not None else sys.float_info.max 
 
+        # ดึงค่า min, max สำหรับ cost (notional value)
         cost_min = market_info['limits']['cost'].get('min')
         market_info['limits']['cost']['min'] = float(cost_min) if cost_min is not None else 11.8 # อัปเดต default ตามข้อมูลล่าสุด
         
@@ -160,6 +163,8 @@ def setup_exchange():
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
         logger.debug(f"  Contract Size: {market_info.get('contractSize', 'N/A')}") 
+        # เพิ่ม logging สำหรับ full market_info
+        logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
 
         try:
             result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) 
@@ -514,39 +519,27 @@ def check_ema_cross() -> str | None:
 # 10. ฟังก์ชันช่วยสำหรับการคำนวณและตรวจสอบออเดอร์
 # ==============================================================================
 
-# ในฟังก์ชัน calculate_order_details
-
 def calculate_order_details(available_usdt: float, price: float) -> tuple[float, float]:
-    # ... (ส่วนบนเหมือนเดิม) ...
-
+    """
+    คำนวณจำนวน Contracts (สัญญา) และ Margin ที่ต้องการสำหรับเปิดออเดอร์บน OKX.
+    ใช้ค่า limits จาก market_info ที่โหลดมา.
+    """
     try:
-        min_notional_exchange = float(market_info['limits']['cost'].get('min', '11.8')) # Minimum Notional Value in USDT
+        # ดึงค่า limits จาก market_info (ตรวจสอบให้แน่ใจว่าโหลดมาแล้ว)
+        min_notional_exchange = float(market_info['limits']['cost'].get('min', '11.8')) 
         max_notional_exchange = float(market_info['limits']['cost'].get('max', str(sys.float_info.max))) 
         
-        # ยืนยัน Contract Size สำหรับ OKX BTC-USDT-SWAP ตามที่เราได้ข้อมูลจากแอป: 1 Contract = 0.0001 BTC
-        contract_size_in_btc = 0.0001 
+        # OKX BTC-USDT-SWAP contract size is typically 0.0001 BTC per contract
+        contract_size_in_btc = float(market_info.get('contractSize', 0.0001)) 
         logger.debug(f"DEBUG: Confirmed contract_size for {SYMBOL} is {contract_size_in_btc} BTC/contract.")
 
-        # ดึง exchange_amount_step จาก market_info (ควรจะเป็น 1.0 ถ้า 1 contract = 1 unit)
-        # หรือถ้า market_info['limits']['amount']['step'] ให้ค่าที่เหมาะสมสำหรับจำนวน Contracts
-        # เช่น ถ้า OKX ให้ค่า step เป็น 1 หมายถึง increment ทีละ 1 contract
-        # หรือถ้าเป็น 0.0001 หมายถึง increment ทีละ 0.0001 BTC
-        exchange_amount_step_from_market = float(market_info['limits']['amount'].get('step', '1.0')) # สมมติ 1.0 คือเพิ่มทีละ 1 contract
-        
-        # กำหนด actual_step_size สำหรับ Contracts (ไม่ใช่ BTC)
-        # ถ้า 1 Contract = 0.0001 BTC, และ OKX อนุญาตให้เปิดทีละ 1 Contract (step=1)
-        # หรือถ้า OKX ระบุ step = 0.0001 (หมายถึง increment ทีละ 0.0001 BTC)
-        # ถ้า OKX ใช้หน่วย Contract เป็นจำนวนเต็ม (1, 2, 3 contracts) แล้ว 1 contract = 0.0001 BTC
-        # actual_contract_step_size = 1.0 # ถ้าเปิดได้ทีละ 1, 2, 3 Contracts
-        # แต่ถ้า OKX กำหนด limits.amount.step เป็น 0.0001 (หมายถึง 0.0001 BTC)
-        # เราจะใช้ค่าที่ CCXT ดึงมาได้เป็น step size สำหรับการคำนวณ Contracts
-        
-        # สำหรับ OKX, limits.amount.step มักจะเป็น 1 (หมายถึง 1 contract unit)
-        # ดังนั้น เราจะใช้ค่านี้เป็น actual_step_size สำหรับจำนวน contracts
+        # actual_contracts_step_size: ขนาดการเพิ่ม/ลดของจำนวนสัญญา (เช่น 1.0 คือเพิ่มทีละ 1 สัญญา)
         actual_contracts_step_size = float(market_info['limits']['amount'].get('step', '1.0'))
+        logger.debug(f"DEBUG: Actual Contract Step Size from market_info: {actual_contracts_step_size}")
         
-        min_exchange_contracts = float(market_info['limits']['amount'].get('min', '1.0')) # Minimum contracts, assume 1 contract
-
+        # min_exchange_contracts: จำนวนสัญญาขั้นต่ำที่ Exchange อนุญาต
+        min_exchange_contracts = float(market_info['limits']['amount'].get('min', '1.0')) 
+        
     except (TypeError, ValueError) as e:
         logger.critical(f"❌ Error parsing market limits for {SYMBOL}: {e}. Check API response structure. Exiting.", exc_info=True)
         send_telegram(f"⛔️ Critical Error: Cannot parse market limits for {SYMBOL}.\nDetails: {e}")
@@ -556,7 +549,7 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     target_initial_margin = (available_usdt - MARGIN_BUFFER_USDT) * TARGET_POSITION_SIZE_FACTOR
 
     if target_initial_margin <= 0:
-        logger.warning(f"❌ Target initial margin ({target_initial_margin:.2f}) too low after buffer.")
+        logger.warning(f"❌ Target initial margin ({target_initial_margin:.2f}) too low after buffer ({MARGIN_BUFFER_USDT} USDT).")
         return (0, 0)
 
     # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้
@@ -569,8 +562,12 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     contracts_raw = target_base_amount_btc_raw / contract_size_in_btc 
     
     # ปัดเศษ contracts ให้เป็นไปตาม actual_contracts_step_size
+    # ใช้ round() เพื่อให้ได้ค่าที่ใกล้เคียงที่สุดตาม step
     contracts_to_open = round(contracts_raw / actual_contracts_step_size) * actual_contracts_step_size
-    contracts_to_open = float(f"{contracts_to_open:.10f}") # ควบคุม precision
+    
+    # ควบคุม precision ด้วย f-string ก่อนส่งให้ CCXT เพื่อหลีกเลี่ยง float inaccuracies
+    # CCXT จะจัดการ precision สุดท้ายอีกครั้งด้วย amount_to_precision
+    contracts_to_open = float(f"{contracts_to_open:.8f}") # ปัดให้มีทศนิยม 8 ตำแหน่ง
 
     # ตรวจสอบขั้นต่ำและสูงสุดของ Contracts (ถ้ามี)
     contracts_to_open = max(contracts_to_open, min_exchange_contracts)
@@ -582,20 +579,17 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     # ตรวจสอบ Notional Value ที่เกิดขึ้นจริงกับ min_notional_exchange
     if actual_notional_after_precision < min_notional_exchange:
         # หาก Notional จริงๆ หลังปัดเศษ contracts แล้วยังต่ำกว่าขั้นต่ำของ Notional
-        # อาจจะต้องปรับ contracts_to_open ให้เป็นขนาดที่ตรงกับ min_notional_exchange
-        # ซึ่งจะทำให้ contracts_to_open อาจจะไม่ได้เป็นไปตาม TARGET_POSITION_SIZE_FACTOR เป๊ะๆ
-        # แต่จะเปิดได้ตามขั้นต่ำของ Exchange
-        
         # คำนวณ Contracts ที่ตรงกับ min_notional_exchange
         contracts_from_min_notional = min_notional_exchange / (contract_size_in_btc * price)
         contracts_from_min_notional = round(contracts_from_min_notional / actual_contracts_step_size) * actual_contracts_step_size
-        contracts_from_min_notional = float(f"{contracts_from_min_notional:.10f}")
+        contracts_from_min_notional = float(f"{contracts_from_min_notional:.8f}")
         
         # เลือก contracts_to_open ที่มากที่สุดระหว่างที่คำนวณได้กับที่มาจาก min_notional
         contracts_to_open = max(contracts_to_open, contracts_from_min_notional)
         actual_notional_after_precision = contracts_to_open * contract_size_in_btc * price # อัปเดต Notional ตาม contracts ใหม่
 
     # คำนวณ Margin ที่แท้จริงจาก Contracts ที่จะเปิด
+    # margin = (contracts * contract_size * price) / leverage
     required_margin = actual_notional_after_precision / LEVERAGE
 
     if contracts_to_open == 0:
@@ -612,16 +606,40 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     logger.debug(f"💡 DEBUG (calculate_order_details): Contract Size (BTC/Contract): {contract_size_in_btc:.8f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Raw Contracts: {contracts_raw:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Contract Step Size: {actual_contracts_step_size}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Contracts to Open (final): {contracts_to_open:.8f}") 
+    logger.debug(f"💡 DEBUG (calculate_order_details): Contracts to Open (final calculated): {contracts_to_open:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Notional (after precision): {actual_notional_after_precision:.2f} USDT")
     logger.debug(f"💡 DEBUG (calculate_order_details): Calculated Required Margin: {required_margin:.2f} USDT")
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Notional Exchange: {min_notional_exchange:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Contracts Exchange: {min_exchange_contracts:.8f}")
 
-
     return (contracts_to_open, required_margin) # <-- คืนค่าเป็น (จำนวน Contracts, Margin)
 
-# ในฟังก์ชัน open_market_order:
+def confirm_position_entry(direction: str, expected_contracts_estimate: float) -> tuple[bool, float | None]:
+    """
+    ยืนยันว่าโพซิชันถูกเปิดสำเร็จ และดึง Entry Price จริง.
+    """
+    for i in range(CONFIRMATION_RETRIES):
+        logger.info(f"⏳ กำลังยืนยันโพซิชัน (Attempt {i+1}/{CONFIRMATION_RETRIES})...")
+        pos = get_current_position()
+        if pos:
+            # OKX 'pos' field from fetch_positions already gives absolute amount
+            actual_pos_size = pos['size']
+            
+            # ตรวจสอบว่าขนาดโพซิชันที่เปิดอยู่ใกล้เคียงกับที่เราคาดหวังหรือไม่
+            if abs(actual_pos_size - expected_contracts_estimate) / expected_contracts_estimate < 0.05: # 5% tolerance
+                logger.info(f"✅ โพซิชัน {pos['side'].upper()} ยืนยันสำเร็จ. Entry Price: {pos['entry_price']:.2f}, Size: {actual_pos_size:.8f} Contracts")
+                return True, pos['entry_price']
+            else:
+                logger.warning(f"⚠️ โพซิชันที่ยืนยันมีขนาดไม่ตรงกับที่คาดหวัง. คาดหวัง: {expected_contracts_estimate:.8f}, จริง: {actual_pos_size:.8f}. รออีกครั้ง...")
+        else:
+            logger.info("ℹ️ ยังไม่พบโพซิชันที่เปิดอยู่. รออีกครั้ง...")
+
+        time.sleep(CONFIRMATION_SLEEP)
+    
+    logger.error(f"❌ ไม่สามารถยืนยันโพซิชันได้หลังจาก {CONFIRMATION_RETRIES} ครั้ง.")
+    send_telegram(f"⛔️ Order Failed: ไม่สามารถยืนยันโพซิชันที่เปิดได้\nโปรดตรวจสอบด้วยตนเอง!")
+    return False, None
+
 
 def open_market_order(direction: str, current_price: float) -> tuple[bool, float | None]:
     global current_position_size
@@ -635,20 +653,22 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
             return False, None
 
         # รับค่าเป็นจำนวน Contracts และ Margin
-        order_amount_contracts, estimated_used_margin = calculate_order_details(balance, current_price) # <-- เปลี่ยนชื่อตัวแปร
+        order_amount_contracts_raw, estimated_used_margin = calculate_order_details(balance, current_price) 
         
-        if order_amount_contracts <= 0: # <-- ใช้ order_amount_contracts
+        if order_amount_contracts_raw <= 0:
             error_msg = "❌ Calculated order amount (contracts) is zero or insufficient. Cannot open position."
             send_telegram(f"⛔️ Order Calculation Error: {error_msg}")
             logger.error(f"❌ {error_msg}")
             return False, None
         
-        # เพื่อแสดงผลให้สวยงาม
-        decimal_places_for_contracts = int(round(-math.log10(0.0001))) if 0.0001 < 1 else 0 # 0.0001 คือ Contract Size/Precision
-        
+        # *** ใช้ exchange.amount_to_precision() เพื่อปัดเศษจำนวนสัญญาให้ตรงกับ Exchange ***
+        final_amount_to_send = exchange.amount_to_precision(SYMBOL, order_amount_contracts_raw)
+        final_amount_to_send_float = float(final_amount_to_send)
+
         logger.info(f"ℹ️ Trading Summary:")
         logger.info(f"   - Balance: {balance:,.2f} USDT")
-        logger.info(f"   - Contracts to Open: {order_amount_contracts:,.{decimal_places_for_contracts}f}") # แสดง Contracts
+        logger.info(f"   - Contracts to Open (calculated raw): {order_amount_contracts_raw:,.8f}")
+        logger.info(f"   - Contracts to Open (final after precision): {final_amount_to_send_float:,.8f}") # นี่คือค่าที่จะถูกส่งไป
         logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + MARGIN_BUFFER_USDT:,.2f} USDT")
         logger.info(f"   - Direction: {direction.upper()}")
         
@@ -660,13 +680,12 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
 
         order = None
         for attempt in range(3):
-            # ส่ง order_amount_contracts (ในหน่วย Contracts) เป็น amount
-            logger.info(f"⚡️ ส่งคำสั่ง Market Order (Attempt {attempt + 1}/3) - {order_amount_contracts:,.{decimal_places_for_contracts}f} Contracts") 
+            logger.info(f"⚡️ ส่งคำสั่ง Market Order (Attempt {attempt + 1}/3) - {final_amount_to_send_float:,.8f} Contracts") 
             try:
                 order = exchange.create_market_order(
                     symbol=SYMBOL,
                     side=side,
-                    amount=order_amount_contracts, # <-- ส่งเป็น Contracts (เหมือน Binance Bot)
+                    amount=final_amount_to_send_float, # <--- ตรงนี้คือจำนวนสัญญาที่ปัดเศษแล้ว
                     params=params
                 )
                 
@@ -699,8 +718,7 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
             send_telegram("⛔️ Order Failed: ล้มเหลวในการส่งออเดอร์หลังจาก 3 ครั้ง")
             return False, None
         
-        # confirm_position_entry จะใช้ order_amount_contracts ที่คำนวณได้เป็น expected_contracts_estimate
-        return confirm_position_entry(direction, order_amount_contracts) # <-- ส่งจำนวน Contracts โดยตรง
+        return confirm_position_entry(direction, final_amount_to_send_float) 
             
     except Exception as e:
         logger.error(f"❌ Critical Error in open_market_order: {e}", exc_info=True)
@@ -730,14 +748,14 @@ def close_current_position_immediately(current_pos_details: dict):
     time.sleep(1) # รอสักครู่ให้คำสั่งยกเลิกดำเนินการ
 
     side_to_close = 'sell' if current_pos_details['side'] == 'long' else 'buy'
-    amount_to_close = current_pos_details['size']
+    amount_to_close = current_pos_details['size'] # <--- ใช้ current_position_size (จำนวนสัญญา)
 
     try:
         logger.info(f"⚡️ ส่งคำสั่ง Market Order เพื่อปิดโพซิชัน {current_pos_details['side'].upper()} ขนาด {amount_to_close:,.8f} Contracts...")
         close_order = exchange.create_market_order(
             symbol=SYMBOL,
             side=side_to_close,
-            amount=amount_to_close,
+            amount=amount_to_close, # <--- ส่งเป็นจำนวน Contracts
             params={
                 'tdMode': 'cross',
                 'posSide': current_pos_details['side'], # ระบุ posSide เพื่อให้ปิดด้านที่ถูกต้อง
@@ -765,93 +783,6 @@ def close_current_position_immediately(current_pos_details: dict):
         logger.error(f"❌ Unexpected error ในการปิดโพซิชันทันที: {e}", exc_info=True)
         send_telegram(f"⛔️ Unexpected Error (Emergency Close): {e}\nโปรดตรวจสอบโพซิชันใน Exchange!")
 
-def open_market_order(direction: str, current_price: float) -> tuple[bool, float | None]:
-    global current_position_size
-
-    try:
-        balance = get_portfolio_balance()
-        if balance <= MARGIN_BUFFER_USDT:
-            error_msg = f"ยอดคงเหลือ ({balance:,.2f} USDT) ต่ำเกินไป ไม่เพียงพอสำหรับ Margin Buffer ({MARGIN_BUFFER_USDT} USDT)."
-            send_telegram(f"⛔️ Balance Error: {error_msg}")
-            logger.error(f"❌ {error_msg}")
-            return False, None
-
-        order_notional_value, estimated_used_margin = calculate_order_details(balance, current_price)
-        
-        if order_notional_value <= 0:
-            error_msg = "❌ Calculated order notional value is zero or insufficient. Cannot open position."
-            send_telegram(f"⛔️ Order Calculation Error: {error_msg}")
-            logger.error(f"❌ {error_msg}")
-            return False, None
-        
-        logger.info(f"ℹ️ Trading Summary:")
-        logger.info(f"   - Balance: {balance:,.2f} USDT")
-        logger.info(f"   - Notional Value: {order_notional_value:,.2f} USDT") 
-        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + MARGIN_BUFFER_USDT:,.2f} USDT")
-        logger.info(f"   - Direction: {direction.upper()}")
-        
-        side = 'buy' if direction == 'long' else 'sell'
-        params = {
-            'tdMode': 'cross', 
-            'posSide': direction, 
-        }
-
-        order = None
-        for attempt in range(3):
-            logger.info(f"⚡️ ส่งคำสั่ง Market Order (Attempt {attempt + 1}/3) - {order_notional_value:,.2f} USDT Notional") 
-            try:
-                order = exchange.create_market_order(
-                    symbol=SYMBOL,
-                    side=side,
-                    amount=order_notional_value, 
-                    params=params
-                )
-                
-                if order and order.get('id'):
-                    logger.info(f"✅ Market Order ส่งสำเร็จ: ID → {order.get('id')}")
-                    time.sleep(2) 
-                    break
-                else:
-                    logger.warning(f"⚠️ Order response ไม่สมบูรณ์ (Attempt {attempt + 1}/3)")
-                    
-            except ccxt.NetworkError as e:
-                logger.warning(f"⚠️ Network Error (Attempt {attempt + 1}/3): {e}")
-                if attempt == 2:
-                    send_telegram(f"⛔️ Network Error: ไม่สามารถส่งออเดอร์ได้\n{str(e)[:200]}...")
-                time.sleep(15)
-                
-            except ccxt.ExchangeError as e:
-                logger.warning(f"⚠️ Exchange Error (Attempt {attempt + 1}/3): {e}")
-                if attempt == 2:
-                    send_telegram(f"⛔️ Exchange Error: ไม่สามารถส่งออเดอร์ได้\n{str(e)[:200]}...")
-                time.sleep(15)
-                
-            except Exception as e:
-                logger.error(f"❌ Unexpected error (Attempt {attempt + 1}/3): {e}", exc_info=True)
-                send_telegram(f"⛔️ Unexpected Error: ไม่สามารถส่งออเดอร์ได้\n{str(e)[:200]}...")
-                return False, None
-        
-        if not order:
-            logger.error("❌ ล้มเหลวในการส่งออเดอร์หลังจาก 3 ครั้ง")
-            send_telegram("⛔️ Order Failed: ล้มเหลวในการส่งออเดอร์หลังจาก 3 ครั้ง")
-            return False, None
-        
-        # คำนวณ expected_contracts_estimate จาก Notional เพื่อส่งให้ confirm_position_entry
-        okx_btc_contract_size_in_btc = 0.0001 
-
-        if okx_btc_contract_size_in_btc == 0:
-            logger.error("❌ OKX BTC Contract Size is 0. Cannot estimate expected contracts.")
-            expected_contracts_estimate = 0.0
-        else:
-            expected_contracts_estimate = order_notional_value / (current_price * okx_btc_contract_size_in_btc)
-            expected_contracts_estimate = exchange.amount_to_precision(SYMBOL, expected_contracts_estimate) 
-
-        return confirm_position_entry(direction, float(expected_contracts_estimate)) 
-        
-    except Exception as e:
-        logger.error(f"❌ Critical Error in open_market_order: {e}", exc_info=True)
-        send_telegram(f"⛔️ Critical Error: ไม่สามารถเปิดออเดอร์ได้\n{str(e)[:200]}...")
-        return False, None
 
 # ==============================================================================
 # 11. ฟังก์ชันตั้งค่า TP/SL/กันทุน
@@ -936,7 +867,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
             symbol=SYMBOL,
             type='TAKE_PROFIT_MARKET', 
             side=tp_sl_side,
-            amount=current_position_size, 
+            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
             price=current_market_price, 
             params={
                 'triggerPrice': tp_price, 
@@ -950,7 +881,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
             side=tp_sl_side,         
-            amount=current_position_size,         
+            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
             price=current_market_price, 
             params={
                 'triggerPrice': sl_price, 
@@ -1030,7 +961,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
             symbol=SYMBOL,
             type='STOP_LOSS_MARKET', 
             side=new_sl_side,
-            amount=current_position_size, 
+            amount=current_position_size, # <--- ใช้ current_position_size (จำนวนสัญญา)
             price=current_market_price, 
             params={
                 'triggerPrice': breakeven_sl_price,
@@ -1072,7 +1003,9 @@ def monitor_position(pos_info: dict | None, current_price: float):
         pnl_usdt_actual = 0.0
 
         # คำนวณ PnL โดยใช้ Contract Size ที่ถูกต้อง (0.0001 BTC ต่อ Contract)
-        okx_btc_contract_size_in_btc = 0.0001 
+        # ตรวจสอบว่า market_info มี contractSize หรือไม่ ถ้าไม่ ให้ใช้ค่า Default
+        okx_btc_contract_size_in_btc = float(market_info.get('contractSize', 0.0001)) 
+        
         if entry_price and current_position_size and okx_btc_contract_size_in_btc > 0:
             if current_position_details['side'] == 'long':
                 pnl_usdt_actual = (closed_price - entry_price) * current_position_size * okx_btc_contract_size_in_btc
@@ -1364,5 +1297,3 @@ def main():
 # ==============================================================================
 if __name__ == '__main__':
     main()
-
-
