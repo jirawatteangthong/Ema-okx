@@ -31,7 +31,6 @@ BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
-# MARGIN_BUFFER_USDT = 25 # <--- ลบออกไปแล้ว
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
 MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
 MIN_MARGIN_BUFFER_USDT = 5.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
@@ -164,8 +163,8 @@ def setup_exchange():
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
-        # --- IMPORTANT: market_info.get('contractSize') might be incorrect ---
-        # We will use a hardcoded value in calculate_order_details for BTC-USDT-SWAP
+        # --- IMPORTANT: market_info.get('contractSize') might be incorrect for OKX BTC-USDT-SWAP ---
+        # We hardcode the correct value (0.0001) in calculate_order_details and monitor_position.
         logger.debug(f"  Contract Size (from market_info, for reference only): {market_info.get('contractSize', 'N/A')}") 
         # เพิ่ม logging สำหรับ full market_info
         logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
@@ -366,7 +365,7 @@ def get_current_position() -> dict | None:
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
             positions = exchange.fetch_positions([SYMBOL]) 
-            logger.debug(f"DEBUG: Raw positions fetched: {positions}") # <--- Keep this for full raw data inspection
+            logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
             time.sleep(1) 
             
             active_positions = [
@@ -382,12 +381,6 @@ def get_current_position() -> dict | None:
                 pos_info = pos.get('info', {})
                 pos_amount_str = pos_info.get('pos') 
                 
-                # *** IMPORTANT: Use pos['contracts'] or pos['amount'] if available and correctly normalized by CCXT ***
-                # If pos_info.get('pos') returns a value like "1" but means "1 contract"
-                # and CCXT's 'amount' or 'contracts' field is also 1, then use it.
-                # If 'pos' field from OKX API sometimes returns a BTC value, not contract count,
-                # then you would need to convert it using the correct contract_size (0.0001 BTC/contract).
-                # For now, let's assume 'pos' here is contract count, based on the previous log showing 'Size=1.0 Contracts'.
                 pos_amount = abs(float(pos_amount_str)) 
 
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
@@ -399,7 +392,7 @@ def get_current_position() -> dict | None:
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
                         'side': side,
-                        'size': pos_amount, # This is the contract count
+                        'size': pos_amount, 
                         'entry_price': entry_price_okx,
                         'unrealized_pnl': unrealized_pnl_okx,
                         'pos_id': pos.get('id', 'N/A') 
@@ -542,20 +535,15 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         
         # *** IMPORTANT FIX ***
         # OKX BTC-USDT-SWAP contract size is DEFINITELY 0.0001 BTC per contract.
-        # Your log showed 0.01, which is incorrect and caused the small order size.
-        # Hardcode this value to ensure correctness, as market_info might sometimes be unreliable.
+        # Hardcode this value to ensure correctness, as market_info.get('contractSize') might sometimes be unreliable.
         contract_size_in_btc = 0.0001 # <--- แก้ไขตรงนี้เป็นค่าที่ถูกต้อง
         logger.debug(f"DEBUG: Confirmed contract_size for {SYMBOL} is {contract_size_in_btc} BTC/contract.")
 
         # actual_contracts_step_size: ขนาดการเพิ่ม/ลดของจำนวนสัญญา (เช่น 1.0 คือเพิ่มทีละ 1 สัญญา)
-        # Your log shows 1.0, which is correct for contracts on OKX.
         actual_contracts_step_size = float(market_info['limits']['amount'].get('step', '1.0'))
         logger.debug(f"DEBUG: Actual Contract Step Size from market_info: {actual_contracts_step_size}")
         
         # min_exchange_contracts: จำนวนสัญญาขั้นต่ำที่ Exchange อนุญาต
-        # Your log shows 0.01, which is incorrect if it means 0.01 CONTRACTS.
-        # If it means 0.01 BTC, it's 100 contracts.
-        # Based on OKX, min contracts for BTC-USDT-SWAP is 1.0.
         min_exchange_contracts = float(market_info['limits']['amount'].get('min', '1.0')) 
         
     except (TypeError, ValueError) as e:
@@ -565,14 +553,14 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
 
     # คำนวณ Margin Buffer จากเปอร์เซ็นต์ของยอด Available USDT
     # ให้มีค่าต่ำสุดด้วย เพื่อป้องกันการคำนวณ buffer ที่น้อยเกินไปเมื่อทุนน้อยมาก
-    # และเพื่อให้ MARGIN_BUFFER_PERCENTAGE ถูกใช้
-    actual_margin_buffer = max(available_usdt * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT) # <--- แก้ไขตรงนี้
+    actual_margin_buffer = max(available_usdt * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT) 
     
     # คำนวณ Margin ที่เราต้องการใช้ (จาก Balance ที่มี และ Factor)
+    # available_usdt - actual_margin_buffer คือเงินส่วนที่เหลือหลังจากกันบัฟเฟอร์
     target_initial_margin = (available_usdt - actual_margin_buffer) * TARGET_POSITION_SIZE_FACTOR
 
     if target_initial_margin <= 0:
-        logger.warning(f"❌ Target initial margin ({target_initial_margin:.2f}) too low after buffer ({actual_margin_buffer} USDT).") # <--- ใช้ actual_margin_buffer ใน log
+        logger.warning(f"⚠️ Target initial margin ({target_initial_margin:.2f}) too low after buffer ({actual_margin_buffer} USDT).") 
         return (0, 0)
 
     # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้
@@ -616,16 +604,14 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         logger.warning(f"⚠️ Calculated contracts to open is 0 after all adjustments. (Target Notional: {target_notional_for_order:.2f} USDT).")
         return (0, 0)
         
-    if available_usdt < required_margin + actual_margin_buffer: # <--- ใช้ actual_margin_buffer ที่นี่
-        logger.error(f"❌ Margin not sufficient. Available: {available_usdt:.2f}, Required: {required_margin:.2f} + {actual_margin_buffer} (Buffer) = {required_margin + actual_margin_buffer:.2f} USDT.") # <--- ใช้ actual_margin_buffer ใน log
+    if available_usdt < required_margin + actual_margin_buffer: 
+        logger.error(f"❌ Margin not sufficient. Available: {available_usdt:.2f}, Required: {required_margin:.2f} + {actual_margin_buffer} (Buffer) = {required_margin + actual_margin_buffer:.2f} USDT.") 
         return (0, 0)
     
     logger.debug(f"💡 DEBUG (calculate_order_details): Available USDT: {available_usdt:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Target Initial Margin: {target_initial_margin:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Target Notional: {target_notional_for_order:.2f} USDT")
-    # เพิ่ม logging สำหรับ Actual Margin Buffer
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Margin Buffer: {actual_margin_buffer:.2f} USDT")
-    # ... (ส่วนที่เหลือของ logging เหมือนเดิม) ...
     logger.debug(f"💡 DEBUG (calculate_order_details): Contract Size (BTC/Contract): {contract_size_in_btc:.8f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Raw Contracts: {contracts_raw:.8f}") 
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Contract Step Size: {actual_contracts_step_size}")
@@ -635,8 +621,7 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Notional Exchange: {min_notional_exchange:.2f}")
     logger.debug(f"💡 DEBUG (calculate_order_details): Min Contracts Exchange: {min_exchange_contracts:.8f}")
 
-    return (contracts_to_open, required_margin) # <-- คืนค่าเป็น (จำนวน Contracts, Margin)
-    
+    return (contracts_to_open, required_margin) 
 
 def confirm_position_entry(direction: str, expected_contracts_estimate: float) -> tuple[bool, float | None]:
     """
@@ -651,6 +636,7 @@ def confirm_position_entry(direction: str, expected_contracts_estimate: float) -
             actual_pos_size = pos['size']
             
             # ตรวจสอบว่าขนาดโพซิชันที่เปิดอยู่ใกล้เคียงกับที่เราคาดหวังหรือไม่
+            # ให้ tolerance สูงหน่อยเผื่อ exchange มีการปรับ size เล็กน้อย
             if abs(actual_pos_size - expected_contracts_estimate) / expected_contracts_estimate < 0.05: # 5% tolerance
                 # *** อัปเดต Global Variables ทันทีที่ยืนยันโพซิชันสำเร็จ ***
                 current_position_details = pos
@@ -676,8 +662,8 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
 
     try:
         balance = get_portfolio_balance()
-        if balance <= MARGIN_BUFFER_USDT:
-            error_msg = f"ยอดคงเหลือ ({balance:,.2f} USDT) ต่ำเกินไป ไม่เพียงพอสำหรับ Margin Buffer ({MARGIN_BUFFER_USDT} USDT)."
+        if balance <= MIN_MARGIN_BUFFER_USDT: # ตรวจสอบกับบัฟเฟอร์ขั้นต่ำก่อน
+            error_msg = f"ยอดคงเหลือ ({balance:,.2f} USDT) ต่ำเกินไป ไม่เพียงพอสำหรับ Margin Buffer ({MIN_MARGIN_BUFFER_USDT} USDT)."
             send_telegram(f"⛔️ Balance Error: {error_msg}")
             logger.error(f"❌ {error_msg}")
             return False, None
@@ -699,7 +685,7 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
         logger.info(f"   - Balance: {balance:,.2f} USDT")
         logger.info(f"   - Contracts to Open (calculated raw): {order_amount_contracts_raw:,.8f}")
         logger.info(f"   - Contracts to Open (final after precision): {final_amount_to_send_float:,.8f}") # นี่คือค่าที่จะถูกส่งไป
-        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + MARGIN_BUFFER_USDT:,.2f} USDT")
+        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + max(balance * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT):,.2f} USDT") # <--- ปรับ log buffer
         logger.info(f"   - Direction: {direction.upper()}")
         
         side = 'buy' if direction == 'long' else 'sell'
@@ -778,18 +764,18 @@ def close_current_position_immediately(current_pos_details: dict):
     time.sleep(1) # รอสักครู่ให้คำสั่งยกเลิกดำเนินการ
 
     side_to_close = 'sell' if current_pos_details['side'] == 'long' else 'buy'
-    amount_to_close = current_pos_details['size'] # <--- ใช้ current_position_size (จำนวนสัญญา)
+    amount_to_close = current_pos_details['size'] 
 
     try:
         logger.info(f"⚡️ ส่งคำสั่ง Market Order เพื่อปิดโพซิชัน {current_pos_details['side'].upper()} ขนาด {amount_to_close:,.8f} Contracts...")
         close_order = exchange.create_market_order(
             symbol=SYMBOL,
             side=side_to_close,
-            amount=amount_to_close, # <--- ส่งเป็นจำนวน Contracts
+            amount=amount_to_close, 
             params={
                 'tdMode': 'cross',
-                'posSide': current_pos_details['side'], # ระบุ posSide เพื่อให้ปิดด้านที่ถูกต้อง
-                'reduceOnly': True, # สำคัญมาก: เพื่อให้เป็นคำสั่งปิดเท่านั้น
+                'posSide': current_pos_details['side'], 
+                'reduceOnly': True, 
             }
         )
         logger.info(f"✅ คำสั่งปิดโพซิชันส่งสำเร็จ: ID → {close_order.get('id', 'N/A')}")
@@ -1202,7 +1188,7 @@ def send_startup_message():
 <b>⏰ เวลาเริ่ม:</b> <code>{startup_time}</code>
 <b>📊 เฟรม:</b> <code>{TIMEFRAME}</code> | <b>Leverage:</b> <code>{LEVERAGE}x</code>
 <b>🎯 TP:</b> <code>{TP_DISTANCE_POINTS}</code> | <b>SL:</b> <code>{SL_DISTANCE_POINTS}</code>
-<b>🔧 Margin Buffer:</b> <code>{MARGIN_BUFFER_USDT:,.0f} USDT</code>
+<b>🔧 Margin Buffer:</b> <code>{MARGIN_BUFFER_PERCENTAGE*100:,.0f}% + Min {MIN_MARGIN_BUFFER_USDT:,.0f} USDT</code>
 <b>📈 รอสัญญาณ EMA Cross...</b>"""
 
         send_telegram(message)
