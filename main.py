@@ -22,9 +22,9 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
+TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
 LEVERAGE = 30    # อัปเดต Leverage ตามที่คุณตั้ง
-TP_DISTANCE_POINTS = 300  # อาจจะลอง 50 จุด
+TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
 BE_PROFIT_TRIGGER_POINTS = 200  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
 BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
