@@ -33,7 +33,7 @@ CROSS_THRESHOLD_POINTS = 1
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
 MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
-MIN_MARGIN_BUFFER_USDT = 5.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
+MIN_MARGIN_BUFFER_USDT = 25.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
