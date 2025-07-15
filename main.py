@@ -22,18 +22,18 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
-TIMEFRAME = '3m' # เปลี่ยนเป็น 3 นาที
+TIMEFRAME = '5m' # เปลี่ยนเป็น 3 นาที
 LEVERAGE = 15    # <--- อัปเดต Leverage เป็น 35x ตามที่คุณต้องการ
-TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
-SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
-BE_PROFIT_TRIGGER_POINTS = 180  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+TP_DISTANCE_POINTS = 350  # อาจจะลอง 50 จุด
+SL_DISTANCE_POINTS = 600  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
+BE_PROFIT_TRIGGER_POINTS = 280  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
 BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
 MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
-MIN_MARGIN_BUFFER_USDT = 25.0 # <--- แก้ไขตรงนี้ครับ (เป็น 25.0 หรือ 30.0 ตามที่คุย)
+MIN_MARGIN_BUFFER_USDT = 1.0 # <--- แก้ไขตรงนี้ครับ (เป็น 25.0 หรือ 30.0 ตามที่คุย)
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
