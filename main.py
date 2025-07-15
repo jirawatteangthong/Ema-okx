@@ -33,7 +33,7 @@ CROSS_THRESHOLD_POINTS = 1
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
 MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
-MIN_MARGIN_BUFFER_USDT = 5.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
+MIN_MARGIN_BUFFER_USDT = 25.0 # <--- แก้ไขตรงนี้ครับ (เป็น 25.0 หรือ 30.0 ตามที่คุย)
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -163,12 +163,14 @@ def setup_exchange():
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
+        # --- IMPORTANT: market_info.get('contractSize') might be incorrect for OKX BTC-USDT-SWAP ---
+        # We hardcode the correct value (0.0001) in calculate_order_details and monitor_position.
         logger.debug(f"  Contract Size (from market_info, for reference only): {market_info.get('contractSize', 'N/A')}") 
         logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
 
         try:
             # OKX: set_leverage is usually done account-wide or per-symbol without posSide in Net Mode.
-            # If your account is in Net Mode, 'posSide' is not needed here.
+            # If your account is in Net Mode, 'posSide' should NOT be included here.
             result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) 
             logger.info(f"✅ ตั้งค่า Leverage เป็น {LEVERAGE}x สำหรับ {SYMBOL}: {result}")
         except ccxt.ExchangeError as e:
@@ -357,7 +359,7 @@ def get_portfolio_balance() -> float:
 def get_current_position() -> dict | None:
     """
     ตรวจสอบและดึงข้อมูลโพซิชัน BTC/USDT ปัจจุบันสำหรับ OKX.
-    ปรับปรุงให้รองรับ Hedge Mode และใช้ 'pos' field.
+    ปรับปรุงให้รองรับ Net Mode (One-way Mode).
     """
     retries = 3
     for i in range(retries):
@@ -368,7 +370,7 @@ def get_current_position() -> dict | None:
             logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
             time.sleep(1) 
             
-            # In Net Mode, there should be at most one position for the symbol
+            # In Net Mode, there should be at most one position for the symbol, where 'pos' field is not zero.
             active_positions = [
                 pos for pos in positions
                 if pos.get('info', {}).get('instId') == SYMBOL and float(pos.get('info', {}).get('pos', '0')) != 0
@@ -382,19 +384,17 @@ def get_current_position() -> dict | None:
                 pos_info = pos.get('info', {})
                 pos_amount_str = pos_info.get('pos') 
                 
-                pos_amount = abs(float(pos_amount_str)) # This is the contract count
+                pos_amount = abs(float(pos_amount_str)) # This is the contract count (absolute value)
                 # Determine side based on 'pos' field sign (positive for long, negative for short)
                 side_from_pos_sign = 'long' if float(pos_amount_str) > 0 else 'short'
 
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
                 unrealized_pnl_okx = float(pos_info.get('upl', 0.0))
                 
-                # In Net Mode, 'posSide' might be 'net' or simply not relevant
-                # The 'side' of the position should be inferred from the sign of 'pos'
-                # If posSide is 'net', use side_from_pos_sign
-                side = pos_info.get('posSide', '').lower()
-                if side == 'net' or not side: # If posSide is 'net' (Net Mode) or not provided
-                    side = side_from_pos_sign
+                # In Net Mode, 'posSide' will typically be 'net' or simply not relevant.
+                # The 'side' of the position should be inferred from the sign of 'pos'.
+                # We use side_from_pos_sign as the primary indicator for 'side'.
+                side = side_from_pos_sign # Always use the inferred side for current_position_details
                 
                 if pos_amount > 0: # Ensure positive size
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
@@ -693,7 +693,7 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
         logger.info(f"   - Balance: {balance:,.2f} USDT")
         logger.info(f"   - Contracts to Open (calculated raw): {order_amount_contracts_raw:,.8f}")
         logger.info(f"   - Contracts to Open (final after precision): {final_amount_to_send_float:,.8f}") 
-        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + actual_margin_buffer_for_log:,.2f} USDT") # <--- ปรับ log buffer
+        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + actual_margin_buffer_for_log:,.2f} USDT") 
         logger.info(f"   - Direction: {direction.upper()}")
         
         side = 'buy' if direction == 'long' else 'sell'
@@ -701,8 +701,7 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
             'tdMode': 'cross', 
             # In Net Mode (One-way Mode), 'posSide' is typically not required or should not be sent.
             # OKX automatically determines the position side based on the order 'side' (buy/sell).
-            # If your OKX account is in Net Mode, remove 'posSide'.
-            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
+            # Removed 'posSide' from here.
         }
 
         order = None
@@ -785,8 +784,8 @@ def close_current_position_immediately(current_pos_details: dict):
             amount=amount_to_close, 
             params={
                 'tdMode': 'cross',
-                # In Net Mode, 'posSide' is typically not required or should not be sent for closing orders.
-                # 'posSide': current_pos_details['side'], # <--- ลบบรรทัดนี้ออก
+                # In Net Mode (One-way Mode), 'posSide' is typically not required or should not be sent for closing orders.
+                # Removed 'posSide' from here.
                 'reduceOnly': True, 
             }
         )
@@ -887,7 +886,7 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         common_params = {
             'tdMode': 'cross',
             # In Net Mode (One-way Mode), 'posSide' is typically not required for conditional orders.
-            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
+            # Removed 'posSide' from here.
             'reduceOnly': True, 
         }
 
@@ -982,7 +981,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
         new_sl_params = {
             'tdMode': 'cross',
             # In Net Mode (One-way Mode), 'posSide' is typically not required for conditional orders.
-            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
+            # Removed 'posSide' from here.
             'reduceOnly': True,
         }
 
