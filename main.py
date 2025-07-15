@@ -23,17 +23,24 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
 TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
-LEVERAGE = 15    # <--- อัปเดต Leverage เป็น 35x ตามที่คุณต้องการ
-TP_DISTANCE_POINTS = 350  # อาจจะลอง 50 จุด
-SL_DISTANCE_POINTS = 600  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
-BE_PROFIT_TRIGGER_POINTS = 280  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+LEVERAGE = 15    # <--- อัปเดต Leverage เป็น 15x ตามที่ระบุว่าลองแล้ว
+TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
+SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
+BE_PROFIT_TRIGGER_POINTS = 200  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
 BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
 
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
-MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
-MIN_MARGIN_BUFFER_USDT = 1.0 # <--- แก้ไขตรงนี้ครับ (เป็น 25.0 หรือ 30.0 ตามที่คุย)
+MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
+MIN_MARGIN_BUFFER_USDT = 1.0 # <--- ตั้งเป็นค่าต่ำสุด เพื่อให้ Margin Buffer ส่วนใหญ่มาจาก % ของ Available Balance
+
+# *** IMPORTANT FIX FOR OKX MARGIN CALCULATION ***
+# Based on manual trade (IMG_4924.png), OKX requires 92.11 USDT Margin for 1349.69 USDT Notional at 15x.
+# This means the actual margin factor is (92.11 / 1349.69) = 0.06824 (approx).
+# We will use this factor directly to calculate required margin, instead of (1 / LEVERAGE).
+# This factor is equivalent to an effective leverage of 1 / 0.06824 = ~14.65x
+ACTUAL_OKX_MARGIN_FACTOR = 0.06824 # <--- เพิ่มค่านี้ครับ
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -163,14 +170,10 @@ def setup_exchange():
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
-        # --- IMPORTANT: market_info.get('contractSize') might be incorrect for OKX BTC-USDT-SWAP ---
-        # We hardcode the correct value (0.0001) in calculate_order_details and monitor_position.
         logger.debug(f"  Contract Size (from market_info, for reference only): {market_info.get('contractSize', 'N/A')}") 
         logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
 
         try:
-            # OKX: set_leverage is usually done account-wide or per-symbol without posSide in Net Mode.
-            # If your account is in Net Mode, 'posSide' should NOT be included here.
             result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) 
             logger.info(f"✅ ตั้งค่า Leverage เป็น {LEVERAGE}x สำหรับ {SYMBOL}: {result}")
         except ccxt.ExchangeError as e:
@@ -243,7 +246,7 @@ def load_monthly_stats():
 
             current_month_year_str = datetime.now().strftime('%Y-%m')
             if monthly_stats['month_year'] != current_month_year_str:
-                logger.info(f"🆕 สถิติที่โหลดมาเป็นของเดือน {monthly_stats['month_year']} ไม่ตรงกับเดือนนี้ {current_month_year_str}. จะรีเซ็ตสถิติสำหรับเดือนใหม่.")
+                logger.info(f"🆕 เดือนเปลี่ยนใน add_trade_result: {monthly_stats['month_year']} -> {current_month_year_str}. กำลังรีเซ็ตสถิติประจำเดือน.")
                 reset_monthly_stats()
 
         else:
@@ -562,14 +565,16 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     actual_margin_buffer = max(available_usdt * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT) 
     
     # คำนวณ Margin ที่เราต้องการใช้ (จาก Balance ที่มี และ Factor)
-    target_initial_margin = (available_usdt - actual_margin_buffer) * TARGET_POSITION_SIZE_FACTOR
+    # เราใช้ ACTUAL_OKX_MARGIN_FACTOR แทน (1 / LEVERAGE) เพื่อสะท้อน Margin ที่ OKX ต้องการจริง ๆ
+    target_initial_margin_raw = (available_usdt - actual_margin_buffer) * TARGET_POSITION_SIZE_FACTOR
 
-    if target_initial_margin <= 0:
-        logger.warning(f"⚠️ Target initial margin ({target_initial_margin:.2f}) too low after buffer ({actual_margin_buffer} USDT).") 
+    if target_initial_margin_raw <= 0:
+        logger.warning(f"⚠️ Target initial margin ({target_initial_margin_raw:.2f}) too low after buffer ({actual_margin_buffer} USDT).") 
         return (0, 0)
 
-    # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้
-    target_notional_for_order = target_initial_margin * LEVERAGE
+    # คำนวณ Notional Value ที่ Margin นี้จะเปิดได้ โดยใช้ ACTUAL_OKX_MARGIN_FACTOR
+    # Notional = Target_Initial_Margin / ACTUAL_OKX_MARGIN_FACTOR
+    target_notional_for_order = target_initial_margin_raw / ACTUAL_OKX_MARGIN_FACTOR # <--- แก้ไขตรงนี้
 
     # คำนวณจำนวน BTC (Base Asset) จาก Notional Value
     target_base_amount_btc_raw = target_notional_for_order / price
@@ -603,7 +608,8 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         actual_notional_after_precision = contracts_to_open * contract_size_in_btc * price # อัปเดต Notional ตาม contracts ใหม่
 
     # คำนวณ Margin ที่แท้จริงจาก Contracts ที่จะเปิด
-    required_margin = actual_notional_after_precision / LEVERAGE
+    # ใช้ ACTUAL_OKX_MARGIN_FACTOR ในการคำนวณ Required Margin
+    required_margin = actual_notional_after_precision * ACTUAL_OKX_MARGIN_FACTOR # <--- แก้ไขตรงนี้
 
     if contracts_to_open == 0:
         logger.warning(f"⚠️ Calculated contracts to open is 0 after all adjustments. (Target Notional: {target_notional_for_order:.2f} USDT).")
@@ -614,7 +620,7 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         return (0, 0)
     
     logger.debug(f"💡 DEBUG (calculate_order_details): Available USDT: {available_usdt:.2f}")
-    logger.debug(f"💡 DEBUG (calculate_order_details): Target Initial Margin: {target_initial_margin:.2f}")
+    logger.debug(f"💡 DEBUG (calculate_order_details): Target Initial Margin (Raw): {target_initial_margin_raw:.2f}") # <--- เปลี่ยนชื่อ Log
     logger.debug(f"💡 DEBUG (calculate_order_details): Target Notional: {target_notional_for_order:.2f} USDT")
     logger.debug(f"💡 DEBUG (calculate_order_details): Actual Margin Buffer: {actual_margin_buffer:.2f} USDT")
     logger.debug(f"💡 DEBUG (calculate_order_details): Contract Size (BTC/Contract): {contract_size_in_btc:.8f}")
@@ -969,7 +975,7 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
                     logger.info(f"✅ ยกเลิก SL Order ID {sl_id} สำเร็จ.")
                 except ccxt.OrderNotFound:
                     logger.info(f"💡 Order {sl_id} not found or already canceled/filled. No action needed.")
-                except Exception as cancel_e:
+                except ccxt.BaseError as e:
                     logger.warning(f"⚠️ ไม่สามารถยกเลิก SL Order ID {sl_id} ได้: {cancel_e}")
         else:
             logger.info("ℹ️ ไม่พบคำสั่ง Stop Loss เก่าที่ต้องยกเลิก.")
