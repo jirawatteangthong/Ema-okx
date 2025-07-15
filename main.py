@@ -23,16 +23,17 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 # --- Trade Parameters ---
 SYMBOL = 'BTC-USDT-SWAP' # <--- เปลี่ยนเป็นสัญลักษณ์ OKX Perpetual Swap
 TIMEFRAME = '1m' # เปลี่ยนเป็น 3 นาที
-LEVERAGE = 35    # <--- อัปเดต Leverage เป็น 35x ตามที่คุณต้องการ
-TP_DISTANCE_POINTS = 250  # อาจจะลอง 50 จุด
+LEVERAGE = 15    # <--- อัปเดต Leverage เป็น 35x ตามที่คุณต้องการ
+TP_DISTANCE_POINTS = 200  # อาจจะลอง 50 จุด
 SL_DISTANCE_POINTS = 400  # อาจจะลอง 200 จุด (หรือน้อยกว่า)
-BE_PROFIT_TRIGGER_POINTS = 150  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
-BE_SL_BUFFER_POINTS = 10   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
+BE_PROFIT_TRIGGER_POINTS = 180  # เลื่อน SL เมื่อกำไร 40 จุด (น้อยกว่า TP)
+BE_SL_BUFFER_POINTS = 50   # เลื่อน SL ไปตั้งที่ +10 จุด (เมื่อกำไรแล้วโดน SL ก็ยังได้กำไรเล็กน้อย)
 CROSS_THRESHOLD_POINTS = 1 
+
 # เพิ่มค่าตั้งค่าใหม่สำหรับการบริหารความเสี่ยงและออเดอร์
 TARGET_POSITION_SIZE_FACTOR = 0.7  # <--- อัปเดตตามที่คุณต้องการ (0.7 = 70%)
 MARGIN_BUFFER_PERCENTAGE = 0.05 # <--- เพิ่มส่วนนี้: 5% ของยอด Available USDT เพื่อเป็น Margin Buffer
-MIN_MARGIN_BUFFER_USDT = 25.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
+MIN_MARGIN_BUFFER_USDT = 5.0 # <--- เพิ่ม: กำหนดบัฟเฟอร์ขั้นต่ำเป็น USDT (เพื่อป้องกันกรณีทุนน้อยมาก)
 
 # ค่าสำหรับยืนยันโพซิชันหลังเปิดออเดอร์ (ใช้ใน confirm_position_entry)
 CONFIRMATION_RETRIES = 15  
@@ -162,13 +163,12 @@ def setup_exchange():
         logger.debug(f"DEBUG: Market info limits for {SYMBOL}:")
         logger.debug(f"  Amount: step={market_info['limits']['amount']['step']}, min={market_info['limits']['amount']['min']}, max={market_info['limits']['amount']['max']}")
         logger.debug(f"  Cost: min={market_info['limits']['cost']['min']}, max={market_info['limits']['cost']['max']}")
-        # --- IMPORTANT: market_info.get('contractSize') might be incorrect for OKX BTC-USDT-SWAP ---
-        # We hardcode the correct value (0.0001) in calculate_order_details and monitor_position.
         logger.debug(f"  Contract Size (from market_info, for reference only): {market_info.get('contractSize', 'N/A')}") 
-        # เพิ่ม logging สำหรับ full market_info
         logger.debug(f"DEBUG: Full market_info for {SYMBOL}: {json.dumps(market_info, indent=2)}")
 
         try:
+            # OKX: set_leverage is usually done account-wide or per-symbol without posSide in Net Mode.
+            # If your account is in Net Mode, 'posSide' is not needed here.
             result = exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'}) 
             logger.info(f"✅ ตั้งค่า Leverage เป็น {LEVERAGE}x สำหรับ {SYMBOL}: {result}")
         except ccxt.ExchangeError as e:
@@ -363,10 +363,12 @@ def get_current_position() -> dict | None:
     for i in range(retries):
         try:
             logger.debug(f"🔍 กำลังดึงโพซิชันปัจจุบัน (Attempt {i+1}/{retries})...")
+            # For Net Mode, fetch_positions without posSide parameter will return the net position
             positions = exchange.fetch_positions([SYMBOL]) 
             logger.debug(f"DEBUG: Raw positions fetched: {positions}") 
             time.sleep(1) 
             
+            # In Net Mode, there should be at most one position for the symbol
             active_positions = [
                 pos for pos in positions
                 if pos.get('info', {}).get('instId') == SYMBOL and float(pos.get('info', {}).get('pos', '0')) != 0
@@ -380,14 +382,21 @@ def get_current_position() -> dict | None:
                 pos_info = pos.get('info', {})
                 pos_amount_str = pos_info.get('pos') 
                 
-                pos_amount = abs(float(pos_amount_str)) 
+                pos_amount = abs(float(pos_amount_str)) # This is the contract count
+                # Determine side based on 'pos' field sign (positive for long, negative for short)
+                side_from_pos_sign = 'long' if float(pos_amount_str) > 0 else 'short'
 
                 entry_price_okx = float(pos_info.get('avgPx', 0.0))
                 unrealized_pnl_okx = float(pos_info.get('upl', 0.0))
                 
+                # In Net Mode, 'posSide' might be 'net' or simply not relevant
+                # The 'side' of the position should be inferred from the sign of 'pos'
+                # If posSide is 'net', use side_from_pos_sign
                 side = pos_info.get('posSide', '').lower()
-
-                if side != 'net' and pos_amount > 0:
+                if side == 'net' or not side: # If posSide is 'net' (Net Mode) or not provided
+                    side = side_from_pos_sign
+                
+                if pos_amount > 0: # Ensure positive size
                     logger.debug(f"✅ พบโพซิชันสำหรับ {SYMBOL}: Side={side}, Size={pos_amount}, Entry={entry_price_okx}")
                     return {
                         'side': side,
@@ -397,7 +406,7 @@ def get_current_position() -> dict | None:
                         'pos_id': pos.get('id', 'N/A') 
                     }
             
-            logger.debug(f"⚠️ พบข้อมูลตำแหน่งสำหรับ {SYMBOL} แต่ไม่ตรงกับเงื่อนไข active/hedge mode.")
+            logger.debug(f"⚠️ พบข้อมูลตำแหน่งสำหรับ {SYMBOL} แต่ไม่มีขนาดหรือทิศทางที่ถูกต้องใน Net Mode.")
             return None 
 
         except (ccxt.NetworkError, ccxt.ExchangeError) as e:
@@ -532,10 +541,8 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
         min_notional_exchange = float(market_info['limits']['cost'].get('min', '11.8')) 
         max_notional_exchange = float(market_info['limits']['cost'].get('max', str(sys.float_info.max))) 
         
-        # *** IMPORTANT FIX ***
         # OKX BTC-USDT-SWAP contract size is DEFINITELY 0.0001 BTC per contract.
-        # Hardcode this value to ensure correctness, as market_info.get('contractSize') might sometimes be unreliable.
-        contract_size_in_btc = 0.0001 # <--- แก้ไขตรงนี้เป็นค่าที่ถูกต้อง
+        contract_size_in_btc = 0.0001 
         logger.debug(f"DEBUG: Confirmed contract_size for {SYMBOL} is {contract_size_in_btc} BTC/contract.")
 
         # actual_contracts_step_size: ขนาดการเพิ่ม/ลดของจำนวนสัญญา (เช่น 1.0 คือเพิ่มทีละ 1 สัญญา)
@@ -555,7 +562,6 @@ def calculate_order_details(available_usdt: float, price: float) -> tuple[float,
     actual_margin_buffer = max(available_usdt * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT) 
     
     # คำนวณ Margin ที่เราต้องการใช้ (จาก Balance ที่มี และ Factor)
-    # available_usdt - actual_margin_buffer คือเงินส่วนที่เหลือหลังจากกันบัฟเฟอร์
     target_initial_margin = (available_usdt - actual_margin_buffer) * TARGET_POSITION_SIZE_FACTOR
 
     if target_initial_margin <= 0:
@@ -635,7 +641,6 @@ def confirm_position_entry(direction: str, expected_contracts_estimate: float) -
             actual_pos_size = pos['size']
             
             # ตรวจสอบว่าขนาดโพซิชันที่เปิดอยู่ใกล้เคียงกับที่เราคาดหวังหรือไม่
-            # ให้ tolerance สูงหน่อยเผื่อ exchange มีการปรับ size เล็กน้อย
             if abs(actual_pos_size - expected_contracts_estimate) / expected_contracts_estimate < 0.05: # 5% tolerance
                 # *** อัปเดต Global Variables ทันทีที่ยืนยันโพซิชันสำเร็จ ***
                 current_position_details = pos
@@ -661,8 +666,9 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
 
     try:
         balance = get_portfolio_balance()
-        if balance <= MIN_MARGIN_BUFFER_USDT: # ตรวจสอบกับบัฟเฟอร์ขั้นต่ำก่อน
-            error_msg = f"ยอดคงเหลือ ({balance:,.2f} USDT) ต่ำเกินไป ไม่เพียงพอสำหรับ Margin Buffer ({MIN_MARGIN_BUFFER_USDT} USDT)."
+        # ตรวจสอบกับบัฟเฟอร์ขั้นต่ำก่อนที่จะคำนวณ Margin ทั้งหมด
+        if balance < MIN_MARGIN_BUFFER_USDT: 
+            error_msg = f"ยอดคงเหลือ ({balance:,.2f} USDT) ต่ำเกินไป ไม่เพียงพอสำหรับ Margin Buffer ขั้นต่ำ ({MIN_MARGIN_BUFFER_USDT} USDT)."
             send_telegram(f"⛔️ Balance Error: {error_msg}")
             logger.error(f"❌ {error_msg}")
             return False, None
@@ -680,17 +686,23 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
         final_amount_to_send = exchange.amount_to_precision(SYMBOL, order_amount_contracts_raw)
         final_amount_to_send_float = float(final_amount_to_send)
 
+        # คำนวณ actual_margin_buffer ที่จะใช้ในการแสดงผล log นี้
+        actual_margin_buffer_for_log = max(balance * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT)
+
         logger.info(f"ℹ️ Trading Summary:")
         logger.info(f"   - Balance: {balance:,.2f} USDT")
         logger.info(f"   - Contracts to Open (calculated raw): {order_amount_contracts_raw:,.8f}")
-        logger.info(f"   - Contracts to Open (final after precision): {final_amount_to_send_float:,.8f}") # นี่คือค่าที่จะถูกส่งไป
-        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + max(balance * MARGIN_BUFFER_PERCENTAGE, MIN_MARGIN_BUFFER_USDT):,.2f} USDT") # <--- ปรับ log buffer
+        logger.info(f"   - Contracts to Open (final after precision): {final_amount_to_send_float:,.8f}") 
+        logger.info(f"   - Required Margin (incl. buffer): {estimated_used_margin + actual_margin_buffer_for_log:,.2f} USDT") # <--- ปรับ log buffer
         logger.info(f"   - Direction: {direction.upper()}")
         
         side = 'buy' if direction == 'long' else 'sell'
         params = {
             'tdMode': 'cross', 
-            'posSide': direction, 
+            # In Net Mode (One-way Mode), 'posSide' is typically not required or should not be sent.
+            # OKX automatically determines the position side based on the order 'side' (buy/sell).
+            # If your OKX account is in Net Mode, remove 'posSide'.
+            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
         }
 
         order = None
@@ -700,7 +712,7 @@ def open_market_order(direction: str, current_price: float) -> tuple[bool, float
                 order = exchange.create_market_order(
                     symbol=SYMBOL,
                     side=side,
-                    amount=final_amount_to_send_float, # <--- ตรงนี้คือจำนวนสัญญาที่ปัดเศษแล้ว
+                    amount=final_amount_to_send_float, 
                     params=params
                 )
                 
@@ -773,7 +785,8 @@ def close_current_position_immediately(current_pos_details: dict):
             amount=amount_to_close, 
             params={
                 'tdMode': 'cross',
-                'posSide': current_pos_details['side'], 
+                # In Net Mode, 'posSide' is typically not required or should not be sent for closing orders.
+                # 'posSide': current_pos_details['side'], # <--- ลบบรรทัดนี้ออก
                 'reduceOnly': True, 
             }
         )
@@ -873,7 +886,8 @@ def set_tpsl_for_position(direction: str, entry_price: float, current_market_pri
         
         common_params = {
             'tdMode': 'cross',
-            'posSide': direction, 
+            # In Net Mode (One-way Mode), 'posSide' is typically not required for conditional orders.
+            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
             'reduceOnly': True, 
         }
 
@@ -967,7 +981,8 @@ def move_sl_to_breakeven(direction: str, entry_price: float, current_market_pric
         
         new_sl_params = {
             'tdMode': 'cross',
-            'posSide': direction, 
+            # In Net Mode (One-way Mode), 'posSide' is typically not required for conditional orders.
+            # 'posSide': direction, # <--- ลบบรรทัดนี้ออก
             'reduceOnly': True,
         }
 
@@ -1018,7 +1033,7 @@ def monitor_position(pos_info: dict | None, current_price: float):
         pnl_usdt_actual = 0.0
 
         # คำนวณ PnL โดยใช้ Contract Size ที่ถูกต้อง (0.0001 BTC ต่อ Contract)
-        okx_btc_contract_size_in_btc = 0.0001 # <--- แก้ไขตรงนี้เป็นค่าที่ถูกต้อง
+        okx_btc_contract_size_in_btc = 0.0001 
         
         if entry_price and current_position_size and okx_btc_contract_size_in_btc > 0:
             if current_position_details['side'] == 'long':
