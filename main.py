@@ -6,6 +6,7 @@ import logging
 import json
 import os
 import sys
+import math
 
 # ========================================================================
 
@@ -24,10 +25,10 @@ PASSWORD = os.getenv(‘OKX_PASSWORD’, ‘YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TES
 # — Trade Parameters —
 
 SYMBOL = ‘BTC-USDT-SWAP’
-LEVERAGE = 15
+LEVERAGE = 10
 TP_DISTANCE_POINTS = 250
 SL_DISTANCE_POINTS = 400
-PORTFOLIO_PERCENTAGE = 0.80  # ใช้ 80% ของพอร์ต
+PORTFOLIO_PERCENTAGE = 0.50  # ลดเหลือ 50% เพื่อความปลอดภัย
 
 # — Telegram Settings —
 
@@ -254,12 +255,6 @@ except Exception as e:
     return 0
 ```
 
-# ========================================================================
-
-# 8. Trading Functions
-
-# ========================================================================
-
 def check_margin_requirements(contracts: float, price: float, available_usdt: float) -> bool:
 “”“ตรวจสอบว่า margin เพียงพอหรือไม่”””
 try:
@@ -287,6 +282,12 @@ except Exception as e:
     logger.error(f"❌ ตรวจสอบ margin ไม่ได้: {e}")
     return False
 ```
+
+# ========================================================================
+
+# 8. Trading Functions
+
+# ========================================================================
 
 def open_long_position(current_price: float) -> bool:
 “”“เปิดโพซิชัน Long”””
@@ -499,6 +500,4 @@ except Exception as e:
 # ========================================================================
 
 if **name** == ‘**main**’:
-# เพิ่ม import math
-import math
 main()
