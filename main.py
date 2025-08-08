@@ -1,15 +1,3 @@
-# #!/usr/bin/env python3
-“””
-OKX Trading Bot - Professional Version
-
-A professional trading bot for OKX exchange with proper error handling,
-logging, configuration management, and modular architecture.
-
-Author: Trading Bot Team
-Version: 1.0.0
-License: MIT
-“””
-
 import ccxt
 import time
 import requests
