@@ -14,18 +14,18 @@ import math
 
 # ========================================================================
 
-API_KEY = os.getenv(‘OKX_API_KEY’, ‘YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING’)
-SECRET = os.getenv(‘OKX_SECRET’, ‘YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING’)
-PASSWORD = os.getenv(‘OKX_PASSWORD’, ‘YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING’)
+API_KEY = “YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING”
+SECRET = “YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING”
+PASSWORD = “YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING”
 
-SYMBOL = ‘BTC-USDT-SWAP’
+SYMBOL = “BTC-USDT-SWAP”
 LEVERAGE = 10
 TP_DISTANCE_POINTS = 250
 SL_DISTANCE_POINTS = 400
 PORTFOLIO_PERCENTAGE = 0.80
 
-TELEGRAM_TOKEN = os.getenv(‘TELEGRAM_TOKEN’, ‘YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING’)
-TELEGRAM_CHAT_ID = os.getenv(‘TELEGRAM_CHAT_ID’, ‘YOUR_CHAT_ID_HERE_FOR_LOCAL_TESTING’)
+TELEGRAM_TOKEN = “YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING”
+TELEGRAM_CHAT_ID = “YOUR_CHAT_ID_HERE_FOR_LOCAL_TESTING”
 
 # ========================================================================
 
@@ -35,9 +35,9 @@ TELEGRAM_CHAT_ID = os.getenv(‘TELEGRAM_CHAT_ID’, ‘YOUR_CHAT_ID_HERE_FOR_LO
 
 logging.basicConfig(
 level=logging.INFO,
-format=’%(asctime)s - %(levelname)s - %(message)s’,
+format=”%(asctime)s - %(levelname)s - %(message)s”,
 handlers=[
-logging.FileHandler(‘test_bot.log’, encoding=‘utf-8’),
+logging.FileHandler(“test_bot.log”, encoding=“utf-8”),
 logging.StreamHandler(sys.stdout)
 ]
 )
@@ -61,21 +61,21 @@ market_info = None
 def setup_exchange():
 global exchange, market_info
 try:
-if not all([API_KEY, SECRET, PASSWORD]) or API_KEY == ‘YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING’:
+if not all([API_KEY, SECRET, PASSWORD]) or API_KEY == “YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING”:
 raise ValueError(“กรุณาตั้งค่า API Keys ใน Environment Variables หรือแก้ไขในโค้ดโดยตรง”)
 
 ```
     exchange = ccxt.okx({
-        'apiKey': API_KEY,
-        'secret': SECRET,
-        'password': PASSWORD,
-        'enableRateLimit': True,
-        'options': {
-            'defaultType': 'swap',
-            'adjustForTimeDifference': True,
+        "apiKey": API_KEY,
+        "secret": SECRET,
+        "password": PASSWORD,
+        "enableRateLimit": True,
+        "options": {
+            "defaultType": "swap",
+            "adjustForTimeDifference": True,
         },
-        'verbose': False,
-        'timeout': 30000,
+        "verbose": False,
+        "timeout": 30000,
     })
 
     exchange.set_sandbox_mode(False)
@@ -87,7 +87,7 @@ raise ValueError(“กรุณาตั้งค่า API Keys ใน Environ
     logger.info(f"✅ เชื่อมต่อกับ OKX Exchange สำเร็จ")
 
     try:
-        exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': 'cross'})
+        exchange.set_leverage(LEVERAGE, SYMBOL, params={"mgnMode": "cross"})
         logger.info(f"✅ ตั้งค่า Leverage เป็น {LEVERAGE}x สำเร็จ")
     except Exception as e:
         logger.warning(f"⚠️ ไม่สามารถตั้งค่า Leverage ได้: {e}")
@@ -104,12 +104,12 @@ except Exception as e:
 # ========================================================================
 
 def send_telegram(msg: str):
-if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == ‘YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING’:
+if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == “YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING”:
 logger.warning(“⚠️ ไม่ได้ตั้งค่า Telegram Token - ข้ามการส่งข้อความ”)
 return
 try:
-url = f’https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage’
-params = {‘chat_id’: TELEGRAM_CHAT_ID, ‘text’: msg, ‘parse_mode’: ‘HTML’}
+url = f”https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage”
+params = {“chat_id”: TELEGRAM_CHAT_ID, “text”: msg, “parse_mode”: “HTML”}
 requests.get(url, params=params, timeout=10)
 logger.info(f”📤 ส่ง Telegram: {msg[:50]}…”)
 except Exception as e:
@@ -130,19 +130,19 @@ logger.info(”=” * 60)
 
 ```
     # 1. ดึงข้อมูล Balance
-    balance_data = exchange.fetch_balance(params={'type': 'trade'})
+    balance_data = exchange.fetch_balance(params={"type": "trade"})
     logger.info(f"📋 Raw Balance Data: {json.dumps(balance_data, indent=2)}")
     
     # 2. แยกวิเคราะห์ USDT
-    usdt_info = balance_data.get('USDT', {})
+    usdt_info = balance_data.get("USDT", {})
     logger.info(f"💰 USDT Info from balance_data['USDT']: {usdt_info}")
     
     # 3. ข้อมูลจาก OKX raw data
-    okx_raw_data = balance_data.get('info', {})
+    okx_raw_data = balance_data.get("info", {})
     logger.info(f"🏛️  OKX Raw Info: {json.dumps(okx_raw_data, indent=2)}")
     
     # 4. วิเคราะห์ account data
-    account_data = okx_raw_data.get('data', [])
+    account_data = okx_raw_data.get("data", [])
     logger.info(f"📊 Number of accounts: {len(account_data)}")
     
     total_equity = 0
@@ -152,10 +152,10 @@ logger.info(”=” * 60)
     for i, acc in enumerate(account_data):
         logger.info(f"📈 Account {i+1}: {json.dumps(acc, indent=2)}")
         
-        if acc.get('ccy') == 'USDT':
-            eq = float(acc.get('eq', 0))  # Total equity
-            avail = float(acc.get('availBal', 0))  # Available balance
-            frozen = float(acc.get('frozenBal', 0))  # Used/frozen balance
+        if acc.get("ccy") == "USDT":
+            eq = float(acc.get("eq", 0))  # Total equity
+            avail = float(acc.get("availBal", 0))  # Available balance
+            frozen = float(acc.get("frozenBal", 0))  # Used/frozen balance
             
             total_equity += eq
             available_balance += avail
@@ -255,17 +255,17 @@ except Exception as e:
 def get_portfolio_balance() -> float:
 “”“ดึงยอดคงเหลือ USDT”””
 try:
-balance_data = exchange.fetch_balance(params={‘type’: ‘trade’})
+balance_data = exchange.fetch_balance(params={“type”: “trade”})
 usdt_balance = 0.0
 
 ```
-    if 'USDT' in balance_data and 'free' in balance_data['USDT']:
-        usdt_balance = float(balance_data['USDT']['free'])
+    if "USDT" in balance_data and "free" in balance_data["USDT"]:
+        usdt_balance = float(balance_data["USDT"]["free"])
     else:
-        okx_balance_info = balance_data.get('info', {}).get('data', [])
+        okx_balance_info = balance_data.get("info", {}).get("data", [])
         for account in okx_balance_info:
-            if account.get('ccy') == 'USDT':
-                usdt_balance = float(account.get('availBal', 0.0))
+            if account.get("ccy") == "USDT":
+                usdt_balance = float(account.get("availBal", 0.0))
                 break
 
     logger.info(f"💰 ยอดคงเหลือ USDT: {usdt_balance:,.2f}")
@@ -281,16 +281,16 @@ def get_current_position():
 try:
 positions = exchange.fetch_positions([SYMBOL])
 for pos in positions:
-pos_info = pos.get(‘info’, {})
-pos_amount_str = pos_info.get(‘pos’, ‘0’)
+pos_info = pos.get(“info”, {})
+pos_amount_str = pos_info.get(“pos”, “0”)
 
 ```
         if float(pos_amount_str) != 0:
             return {
-                'side': 'long' if float(pos_amount_str) > 0 else 'short',
-                'size': abs(float(pos_amount_str)),
-                'entry_price': float(pos_info.get('avgPx', 0.0)),
-                'unrealized_pnl': float(pos_info.get('upl', 0.0))
+                "side": "long" if float(pos_amount_str) > 0 else "short",
+                "size": abs(float(pos_amount_str)),
+                "entry_price": float(pos_info.get("avgPx", 0.0)),
+                "unrealized_pnl": float(pos_info.get("upl", 0.0))
             }
     return None
 except Exception as e:
@@ -398,7 +398,7 @@ except Exception as e:
 def get_current_price() -> float:
 try:
 ticker = exchange.fetch_ticker(SYMBOL)
-return float(ticker[‘last’])
+return float(ticker[“last”])
 except Exception as e:
 logger.error(f”❌ ดึงราคาไม่ได้: {e}”)
 return 0.0
@@ -427,14 +427,14 @@ sl_price = entry_price - SL_DISTANCE_POINTS
     try:
         tp_order = exchange.create_order(
             symbol=SYMBOL,
-            type='TAKE_PROFIT_MARKET',
-            side='sell',
+            type="TAKE_PROFIT_MARKET",
+            side="sell",
             amount=contracts,
             price=current_price,
             params={
-                'triggerPrice': tp_price,
-                'tdMode': 'cross',
-                'reduceOnly': True,
+                "triggerPrice": tp_price,
+                "tdMode": "cross",
+                "reduceOnly": True,
             }
         )
         logger.info(f"✅ ตั้ง TP สำเร็จ: {tp_price:,.1f}")
@@ -446,14 +446,14 @@ sl_price = entry_price - SL_DISTANCE_POINTS
     try:
         sl_order = exchange.create_order(
             symbol=SYMBOL,
-            type='STOP_LOSS_MARKET',
-            side='sell',
+            type="STOP_LOSS_MARKET",
+            side="sell",
             amount=contracts,
             price=current_price,
             params={
-                'triggerPrice': sl_price,
-                'tdMode': 'cross',
-                'reduceOnly': True,
+                "triggerPrice": sl_price,
+                "tdMode": "cross",
+                "reduceOnly": True,
             }
         )
         logger.info(f"✅ ตั้ง SL สำเร็จ: {sl_price:,.1f}")
@@ -506,19 +506,19 @@ available_balance, total_equity, used_balance = get_detailed_balance_info()
     # 4. ส่งออเดอร์
     logger.info(f"🚀 กำลังเปิด Long {contracts} contracts ที่ราคา {current_price:,.1f}")
     
-    order_params = {'tdMode': 'cross'}
+    order_params = {"tdMode": "cross"}
     logger.info(f"📤 Order Params: {order_params}")
     
     order = exchange.create_market_order(
         symbol=SYMBOL,
-        side='buy',
+        side="buy",
         amount=contracts,
         params=order_params
     )
 
     logger.info(f"📨 Order Response: {json.dumps(order, indent=2)}")
 
-    if order and order.get('id'):
+    if order and order.get("id"):
         logger.info(f"✅ เปิด Long สำเร็จ: Order ID {order.get('id')}")
         send_telegram(f"🚀 <b>เปิด Long สำเร็จ!</b>\n📊 Contracts: {contracts}\n💰 ราคาเข้า: {current_price:,.1f}\n🆔 Order ID: {order.get('id')}")
         
@@ -595,5 +595,5 @@ except Exception as e:
 
 # ========================================================================
 
-if **name** == ‘**main**’:
+if **name** == “**main**”:
 main()
