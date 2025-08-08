@@ -18,9 +18,10 @@ import math
 
 # ตรวจสอบให้แน่ใจว่าได้ตั้งค่าใน Environment Variables: OKX_API_KEY, OKX_SECRET, OKX_PASSWORD
 
-API_KEY = os.getenv(‘OKX_API_KEY’, ‘YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING’)
-SECRET = os.getenv(‘OKX_SECRET’, ‘YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING’)
-PASSWORD = os.getenv(‘OKX_PASSWORD’, ‘YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING’)  # Passphrase for OKX
+API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
+SECRET = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
+PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')  # Passphrase for OKX
+
 
 # — Trade Parameters —
 
@@ -32,8 +33,8 @@ PORTFOLIO_PERCENTAGE = 0.50  # ลดเหลือ 50% เพื่อคว�
 
 # — Telegram Settings —
 
-TELEGRAM_TOKEN = os.getenv(‘TELEGRAM_TOKEN’, ‘YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING’)
-TELEGRAM_CHAT_ID = os.getenv(‘TELEGRAM_CHAT_ID’, ‘YOUR_CHAT_ID_HERE_FOR_LOCAL_TESTING’)
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', 'YOUR_TELEGRAM_TOKEN_HERE_FOR_LOCAL_TESTING')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', 'YOUR_CHAT_ID_HERE_FOR_LOCAL_TESTING')
 
 # ========================================================================
 
