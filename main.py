@@ -170,16 +170,44 @@ def get_current_position():
 
 def calculate_order_size(available_usdt: float, price: float) -> float:
     try:
+        # เงินที่จะใช้เปิดออเดอร์ ตามเปอร์เซ็นต์พอร์ต
         target_usdt = available_usdt * PORTFOLIO_PERCENTAGE
+
+        # ขนาดสัญญา BTC ขั้นต่ำ (OKX BTCUSDT Futures)
         contract_size_btc = 0.0001
-        target_btc = target_usdt / price
+
+        # ✅ ใช้ Leverage คำนวณ Notional
+        target_usdt_with_leverage = target_usdt * LEVERAGE
+
+        # แปลงจาก USDT → BTC
+        target_btc = target_usdt_with_leverage / price
+
+        # ปัดให้ตรงกับ contract step
         contracts = math.floor(target_btc / contract_size_btc)
+
         if contracts < 1:
             logger.warning(f"⚠️ จำนวน contracts ต่ำเกินไป: {contracts}")
             return 0
+
         actual_notional = contracts * contract_size_btc * price
-        logger.info(f"📊 Order Size: Target={target_usdt:,.2f} USDT | Contracts={contracts} | Notional={actual_notional:,.2f} USDT")
+        margin_required = actual_notional / LEVERAGE
+
+        logger.info(
+            f"📊 Order Size: Target={target_usdt:,.2f} USDT | "
+            f"Leverage={LEVERAGE}x | Contracts={contracts} | "
+            f"Notional={actual_notional:,.2f} USDT | "
+            f"Margin Required={margin_required:,.2f} USDT"
+        )
+
+        # ถ้าทุนไม่พอ ให้แจ้งเตือน
+        if margin_required > available_usdt:
+            logger.error(
+                f"❌ Margin ไม่พอ! Available={available_usdt:.2f} USDT | ต้องใช้ {margin_required:.2f} USDT"
+            )
+            return 0
+
         return float(contracts)
+
     except Exception as e:
         logger.error(f"❌ คำนวณขนาดออเดอร์ไม่ได้: {e}")
         return 0
