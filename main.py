@@ -98,7 +98,7 @@ def open_long(contracts: int):
         params = {
             'tdMode': 'isolated',
             'ordType': 'market',
-            'posSide': 'long'
+            #'posSide': 'long'
         }
         order = exchange.create_order(SYMBOL, 'market', 'buy', contracts, None, params)
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
