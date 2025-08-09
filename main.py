@@ -98,13 +98,13 @@ def open_long(contracts: int):
         params = {
             'tdMode': 'cross',
             'ordType': 'market',
-            'posSide': 'long'
+            # ลบ 'posSide' ออกไป
         }
         order = exchange.create_order(SYMBOL, 'market', 'buy', contracts, None, params)
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
     except Exception as e:
         logger.error(f"❌ เกิดข้อผิดพลาดในการเปิด Long: {e}")
-
+        
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     set_leverage(LEVERAGE)
