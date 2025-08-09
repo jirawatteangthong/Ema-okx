@@ -8,7 +8,7 @@ API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 SYMBOL = 'BTC-USDT-SWAP'
-PORTFOLIO_PERCENTAGE = 0.80
+PORTFOLIO_PERCENTAGE = 0.30
 LEVERAGE = 15
 
 # ---------------- LOGGER ----------------
@@ -111,4 +111,9 @@ if __name__ == "__main__":
     available_margin = get_available_margin()
     price = get_current_price()
     contracts = calculate_order_size(available_margin, price)
+
+    logger.info(f"Available margin: {available_margin}")
+    logger.info(f"Price: {price}")
+    logger.info(f"Calculated contracts: {contracts}")
+
     open_long(contracts)
