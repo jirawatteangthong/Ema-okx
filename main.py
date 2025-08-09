@@ -1,14 +1,12 @@
 import ccxt
 import logging
 import math
-import time
-from datetime import datetime
+import os
 
 # ================== CONFIG ==================
-Variables: OKX_API_KEY, OKX_SECRET, OKX_PASSWORD
 API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
-PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING') # Passphrase for OKX
+PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')  # Passphrase for OKX
 SYMBOL = 'BTC-USDT-SWAP'
 PORTFOLIO_PERCENTAGE = 0.80  # ใช้ 80% ของพอร์ต
 CONTRACT_SIZE_BTC = 0.0001   # ขนาดสัญญา BTC ต่อ 1 contract
@@ -16,7 +14,7 @@ CONTRACT_SIZE_BTC = 0.0001   # ขนาดสัญญา BTC ต่อ 1 contr
 
 # Logger Setup
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG เพื่อให้เห็นทุกขั้นตอน
+    level=logging.DEBUG,  # DEBUG เพื่อดู log ละเอียด
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger()
@@ -24,8 +22,8 @@ logger = logging.getLogger()
 # OKX Setup
 exchange = ccxt.okx({
     'apiKey': API_KEY,
-    'secret': API_SECRET,
-    'password': API_PASSWORD,
+    'secret': SECRET,
+    'password': PASSWORD,
     'enableRateLimit': True,
     'options': {
         'defaultType': 'swap',  # Futures/Swap
