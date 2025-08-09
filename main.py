@@ -1,62 +1,60 @@
-import ccxt
-import logging
-import math
 import os
+import math
+import logging
+import ccxt
 
-# ================== CONFIG ==================
+# ------------------ CONFIG ------------------
 API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
-PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')  # Passphrase for OKX
-SYMBOL = 'BTC-USDT-SWAP'
-PORTFOLIO_PERCENTAGE = 0.80  # ใช้ 80% ของพอร์ต
-CONTRACT_SIZE_BTC = 0.0001   # ขนาดสัญญา BTC ต่อ 1 contract
-# =============================================
+PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
-# Logger Setup
+SYMBOL = 'BTC-USDT-SWAP'
+PORTFOLIO_PERCENTAGE = 0.80
+LEVERAGE = 15
+CONTRACT_SIZE_BTC = 0.0001
+
+# ------------------ LOGGER ------------------
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG เพื่อดู log ละเอียด
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger()
 
-# OKX Setup
+# ------------------ EXCHANGE ------------------
 exchange = ccxt.okx({
     'apiKey': API_KEY,
     'secret': SECRET,
     'password': PASSWORD,
     'enableRateLimit': True,
     'options': {
-        'defaultType': 'swap',  # Futures/Swap
+        'defaultType': 'swap'
     }
 })
 
-# ---------------- GET CURRENT PRICE ----------------
-def get_current_price() -> float:
+# ------------------ FUNCTIONS ------------------
+def get_available_margin():
+    try:
+        balance = exchange.fetch_balance({'type': 'swap'})
+        cross_margin = float(balance['info']['data'][0]['crossEq'])
+        logger.debug(f"💰 Available Margin (Cross): {cross_margin} USDT")
+        return cross_margin
+    except Exception as e:
+        logger.error(f"❌ ดึงข้อมูล margin ไม่ได้: {e}")
+        return 0.0
+
+def get_current_price():
     try:
         ticker = exchange.fetch_ticker(SYMBOL)
         price = float(ticker['last'])
-        logger.debug(f"📈 Current Price: {price}")
+        logger.debug(f"💵 Current Price: {price}")
         return price
     except Exception as e:
         logger.error(f"❌ ดึงราคาไม่ได้: {e}")
         return 0.0
 
-# ---------------- GET MARGIN INFO ----------------
-def get_margin_info() -> float:
+def calculate_order_size(available_usdt, price):
     try:
-        balance = exchange.fetch_balance()
-        cross_usdt = balance['info']['data'][0]['details'][0]['cashBal']
-        cross_usdt = float(cross_usdt)
-        logger.debug(f"💰 Available Margin (Cross): {cross_usdt} USDT")
-        return cross_usdt
-    except Exception as e:
-        logger.error(f"❌ ดึง Margin ไม่ได้: {e}")
-        return 0.0
-
-# ---------------- CALCULATE ORDER SIZE ----------------
-def calculate_order_size(available_usdt: float, price: float) -> float:
-    try:
-        target_usdt = available_usdt * PORTFOLIO_PERCENTAGE
+        target_usdt = available_usdt * PORTFOLIO_PERCENTAGE * LEVERAGE
         target_btc = target_usdt / price
         contracts = math.floor(target_btc / CONTRACT_SIZE_BTC)
 
@@ -65,41 +63,36 @@ def calculate_order_size(available_usdt: float, price: float) -> float:
             return 0
 
         actual_notional = contracts * CONTRACT_SIZE_BTC * price
-        logger.debug(
-            f"📊 Order Size: Target={target_usdt:.2f} USDT | "
-            f"Contracts={contracts} | Notional={actual_notional:.2f} USDT"
-        )
-
-        return float(contracts)
+        logger.debug(f"📊 Order Size: Target={target_usdt:,.2f} USDT | Contracts={contracts} | Notional={actual_notional:,.2f} USDT")
+        return contracts
     except Exception as e:
-        logger.error(f"❌ คำนวณขนาดออเดอร์ไม่ได้: {e}")
+        logger.error(f"❌ คำนวณ order size ไม่ได้: {e}")
         return 0
 
-# ---------------- OPEN LONG POSITION ----------------
-def open_long_position():
+def open_long(contracts):
     try:
-        price = get_current_price()
-        if price == 0:
-            return
-
-        available_margin = get_margin_info()
-        contracts = calculate_order_size(available_margin, price)
-        if contracts == 0:
-            logger.error("🚫 Margin ไม่พอหรือ contracts = 0")
-            return
-
-        # ส่งคำสั่ง
-        order = exchange.create_order(
+        order = exchange.create_market_buy_order(
             symbol=SYMBOL,
-            type='market',
-            side='buy',
             amount=contracts
         )
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
     except Exception as e:
-        logger.error(f"❌ เกิดข้อผิดพลาดในการเปิด Long: {e}")
+        logger.error(f"❌ เปิด Long ไม่ได้: {e}")
 
-# ---------------- MAIN ----------------
+# ------------------ MAIN ------------------
+def main():
+    logger.info("🚀 เริ่มบอท เปิด Long ทันที")
+    available_margin = get_available_margin()
+    price = get_current_price()
+    if price <= 0 or available_margin <= 0:
+        logger.error("❌ Margin หรือราคาไม่ถูกต้อง หยุดทำงาน")
+        return
+
+    contracts = calculate_order_size(available_margin, price)
+    if contracts > 0:
+        open_long(contracts)
+    else:
+        logger.error("❌ ไม่มี contracts เพียงพอในการเปิดออเดอร์")
+
 if __name__ == "__main__":
-    logger.info("🚀 เริ่มระบบบอท")
-    open_long_position()
+    main()
