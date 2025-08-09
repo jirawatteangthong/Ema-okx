@@ -96,15 +96,14 @@ def open_long(contracts: int):
             logger.warning("⚠️ Contracts <= 0 ไม่เปิดออเดอร์")
             return
         params = {
-            'tdMode': 'cross',
+            'tdMode': 'isolated',
             'ordType': 'market',
-            # ลบ 'posSide' ออกไป
+            'posSide': 'long'
         }
         order = exchange.create_order(SYMBOL, 'market', 'buy', contracts, None, params)
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
     except Exception as e:
         logger.error(f"❌ เกิดข้อผิดพลาดในการเปิด Long: {e}")
-        
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
     set_leverage(LEVERAGE)
