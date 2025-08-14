@@ -75,17 +75,18 @@ def get_current_price():
 def calculate_order_size(available_usdt: float, price: float) -> float:
     try:
         target_usdt = available_usdt * PORTFOLIO_PERCENTAGE
-        contract_size_btc = 0.0001
+        contract_size_btc = 0.0001  # OKX BTCUSDT-SWAP contract size
         target_btc = target_usdt / price
         contracts = math.floor(target_btc / contract_size_btc)
 
         if contracts < 1:
-            logger.warning(f"⚠️ Contracts ต่ำกว่า 1: {contracts}")
+            logger.warning(f"⚠️ Contracts ต่ำกว่า 1: {contracts} | Target BTC={target_btc} | Contract size BTC={contract_size_btc}")
             return 0
 
         actual_notional = contracts * contract_size_btc * price
-        logger.debug(f"📊 Order Size: Target={target_usdt:,.2f} USDT | Contracts={contracts} | Notional={actual_notional:,.2f} USDT")
+        logger.debug(f"📊 Order Size: Target={target_usdt:.2f} USDT | Contracts={contracts} | Notional={actual_notional:.2f} USDT")
         return float(contracts)
+
     except Exception as e:
         logger.error(f"❌ คำนวณขนาดออเดอร์ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
