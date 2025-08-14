@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 import time
 import ccxt
@@ -9,11 +10,11 @@ API_KEY  = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET   = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
-SYMBOL = 'BTC-USDT-SWAP'   # ใช้ตัวนี้กับ ccxt.okx ได้ (amount = จำนวน "contracts")
+SYMBOL = 'BTC-USDT-SWAP'   # ccxt okx ใช้ amount = จำนวน "contracts"
 
 # การจัดการทุน/ความเสี่ยง
 PORTFOLIO_PERCENTAGE = 0.80   # ใช้ทุนกี่ % ของ available
-LEVERAGE = 31                 # เลเวอเรจ
+LEVERAGE = 15                 # เลเวอเรจ
 
 # กันไม่ให้ชน 51008 ง่าย
 SAFETY_PCT = 0.70            # กันชนเพิ่มจากสัดส่วนทุน (conservative)
@@ -93,12 +94,15 @@ def get_current_price():
         return 0.0
 
 def get_contract_size(symbol):
+    """
+    OKX BTC-USDT-SWAP = 0.01 BTC/contract
+    ยอมรับ 0<cs<1; ผิดปกติ fallback = 0.01
+    """
     try:
         markets = exchange.load_markets()
         m = markets.get(symbol) or {}
         cs = float(m.get('contractSize') or 0.0)
-        # OKX BTC-USDT-SWAP = 0.01 BTC/contract
-        if cs <= 0 or cs >= 1:   # อนุญาต 0<cs<1 เช่น 0.01, 0.001, 0.0001
+        if cs <= 0 or cs >= 1:
             logger.warning(f"⚠️ contractSize ที่ได้ {cs} ผิดปกติ ใช้ค่า fallback = 0.01")
             return 0.01
         return cs
@@ -141,7 +145,6 @@ def cancel_all_open_orders(symbol: str):
 
 def calc_contracts_by_margin(avail_usdt: float, price: float, contract_size: float) -> int:
     """
-    สร้างขนาดสัญญาจากมาร์จิ้นจริง:
     - effective_avail = avail - FIXED_BUFFER_USDT
     - usable_cash = effective_avail * PORTFOLIO_PERCENTAGE * SAFETY_PCT
     - need_per_ct = (price * contract_size)/LEVERAGE + fee
@@ -244,24 +247,44 @@ def open_long_in_chunks(contracts: int, pos_mode: str):
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
+    # 0) ตั้งเลเวอเรจก่อน
     set_leverage(LEVERAGE)
+
+    # 1) ตรวจ mode (One-way = 'net_mode')
     pos_mode = get_position_mode()
+
+    # 2) ยกเลิกคำสั่งค้างก่อน (ปล่อย ordFrozen)
+    cancel_all_open_orders(SYMBOL)
+
+    # 3) ดึงช่อง margin
     avail, ord_frozen, imr, mmr = get_margin_channels()
     logger.info(f"🔍 Margin channels | avail={avail:.4f} | ordFrozen={ord_frozen:.4f} | imr={imr:.4f} | mmr={mmr:.4f}")
-    
+
+    # 4) ใช้ avail_net เพื่อ sizing
+    avail_net = max(0.0, avail - ord_frozen)
+    logger.info(f"🧮 ใช้ avail_net สำหรับ sizing = {avail_net:.4f} USDT")
+
+    # 5) ราคา + contract size
     price = get_current_price()
-    contract_size = get_contract_size(SYMBOL)
-    logger.info(f"🫙 สรุปสถานะ | avail_net={avail:.4f} USDT | price={price} | contractSize={contract_size}")
+    csize = get_contract_size(SYMBOL)
+    logger.info(f"🫙 สรุปสถานะ | avail_net={avail_net:.4f} USDT | price={price} | contractSize={csize}")
 
-    contracts, need_per_ct = calc_contracts_by_margin(avail, price, contract_size, return_need_per_ct=True)
+    # 6) คำนวณสัญญาแบบ conservative + headroom
+    contracts = calc_contracts_by_margin(avail_net, price, csize)
 
-    # ✅ เช็กว่ามีมาร์จิ้นพอเปิดอย่างน้อย 1 สัญญาไหม
-    if (avail - FIXED_BUFFER_USDT) * PORTFOLIO_PERCENTAGE * HEADROOM < need_per_ct:
+    # === Preflight: เช็กว่าพอเปิดได้อย่างน้อย 1 สัญญาไหม ===
+    usable_cash_first = max(0.0, avail_net - FIXED_BUFFER_USDT) * PORTFOLIO_PERCENTAGE * SAFETY_PCT * HEADROOM
+    notional_per_ct = price * csize
+    need_per_ct = (notional_per_ct / LEVERAGE) + (notional_per_ct * FEE_RATE_TAKER)
+
+    if usable_cash_first < need_per_ct:
         logger.warning(
-            f"⚠️ มาร์จิ้นไม่พอแม้แต่ 1 สัญญา | "
-            f"need_per_ct≈{need_per_ct:.4f} USDT, avail_net≈{avail:.4f} USDT "
-            f"(ลองเพิ่ม LEVERAGE เป็น ≥30 หรือเติมเงิน)"
+            "⚠️ มาร์จิ้นไม่พอแม้แต่ 1 สัญญา | "
+            f"need_per_ct≈{need_per_ct:.4f} USDT, usable_cash_first≈{usable_cash_first:.4f} USDT | "
+            "ทางออก: เพิ่ม LEVERAGE (เช่น ≥30) หรือเติม USDT"
         )
-        sys.exit(0)  # ออกจากโปรแกรม
+        sys.exit(0)  # ถ้าอยากให้แค่ข้ามไม่ปิดโปรแกรม ให้เปลี่ยนเป็น `return`
 
-    open_long(contracts, pos_mode)
+    # 7) เพดานครั้งแรก + แตกคำสั่งเป็นก้อนเล็ก
+    first_shot = min(contracts, MAX_FIRST_ORDER_CONTRACTS)
+    open_long_in_chunks(first_shot, pos_mode)
