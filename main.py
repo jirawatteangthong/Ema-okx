@@ -13,7 +13,7 @@ SYMBOL = 'BTC-USDT-SWAP'   # ใช้ตัวนี้กับ ccxt.okx ไ�
 
 # การจัดการทุน/ความเสี่ยง
 PORTFOLIO_PERCENTAGE = 0.80   # ใช้ทุนกี่ % ของ available
-LEVERAGE = 15                 # เลเวอเรจ
+LEVERAGE = 31                 # เลเวอเรจ
 
 # กันไม่ให้ชน 51008 ง่าย
 SAFETY_PCT = 0.70            # กันชนเพิ่มจากสัดส่วนทุน (conservative)
@@ -93,21 +93,18 @@ def get_current_price():
         return 0.0
 
 def get_contract_size(symbol):
-    """
-    ดึง contractSize จากตลาด; ถ้าผิดปกติให้ fallback = 0.0001 (BTC perp)
-    """
     try:
         markets = exchange.load_markets()
         m = markets.get(symbol) or {}
         cs = float(m.get('contractSize') or 0.0)
-        # BTC perp ปกติ ~ 0.0001 BTC/contract
-        if cs <= 0 or cs > 0.001:
-            logger.warning(f"⚠️ contractSize ที่ได้ {cs} ผิดปกติ ใช้ค่า fallback = 0.0001")
-            return 0.0001
+        # OKX BTC-USDT-SWAP = 0.01 BTC/contract
+        if cs <= 0 or cs >= 1:   # อนุญาต 0<cs<1 เช่น 0.01, 0.001, 0.0001
+            logger.warning(f"⚠️ contractSize ที่ได้ {cs} ผิดปกติ ใช้ค่า fallback = 0.01")
+            return 0.01
         return cs
     except Exception as e:
         logger.error(f"❌ ดึง contractSize ไม่ได้: {e}")
-        return 0.0001
+        return 0.01
 
 def set_leverage(leverage: int):
     try:
@@ -247,31 +244,24 @@ def open_long_in_chunks(contracts: int, pos_mode: str):
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    # 0) ตั้งเลเวอเรจก่อน
     set_leverage(LEVERAGE)
-
-    # 1) ตรวจ mode (One-way = 'net_mode')
     pos_mode = get_position_mode()
-
-    # 2) ยกเลิกคำสั่งค้างก่อน (ปล่อย ordFrozen)
-    cancel_all_open_orders(SYMBOL)
-
-    # 3) ดึงช่อง margin
     avail, ord_frozen, imr, mmr = get_margin_channels()
     logger.info(f"🔍 Margin channels | avail={avail:.4f} | ordFrozen={ord_frozen:.4f} | imr={imr:.4f} | mmr={mmr:.4f}")
-
-    # 4) ใช้ avail_net เพื่อ sizing
-    avail_net = max(0.0, avail - ord_frozen)
-    logger.info(f"🧮 ใช้ avail_net สำหรับ sizing = {avail_net:.4f} USDT")
-
-    # 5) ราคา + contract size
+    
     price = get_current_price()
-    csize = get_contract_size(SYMBOL)
-    logger.info(f"🫙 สรุปสถานะ | avail_net={avail_net:.4f} USDT | price={price} | contractSize={csize}")
+    contract_size = get_contract_size(SYMBOL)
+    logger.info(f"🫙 สรุปสถานะ | avail_net={avail:.4f} USDT | price={price} | contractSize={contract_size}")
 
-    # 6) คำนวณสัญญาแบบ conservative + headroom
-    contracts = calc_contracts_by_margin(avail_net, price, csize)
+    contracts, need_per_ct = calc_contracts_by_margin(avail, price, contract_size, return_need_per_ct=True)
 
-    # 7) เพดานครั้งแรก + แตกคำสั่งเป็นก้อนเล็ก
-    first_shot = min(contracts, MAX_FIRST_ORDER_CONTRACTS)
-    open_long_in_chunks(first_shot, pos_mode)
+    # ✅ เช็กว่ามีมาร์จิ้นพอเปิดอย่างน้อย 1 สัญญาไหม
+    if (avail - FIXED_BUFFER_USDT) * PORTFOLIO_PERCENTAGE * HEADROOM < need_per_ct:
+        logger.warning(
+            f"⚠️ มาร์จิ้นไม่พอแม้แต่ 1 สัญญา | "
+            f"need_per_ct≈{need_per_ct:.4f} USDT, avail_net≈{avail:.4f} USDT "
+            f"(ลองเพิ่ม LEVERAGE เป็น ≥30 หรือเติมเงิน)"
+        )
+        sys.exit(0)  # ออกจากโปรแกรม
+
+    open_long(contracts, pos_mode)
