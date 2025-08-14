@@ -5,21 +5,30 @@ import ccxt
 import logging
 
 # ---------------- CONFIG (ฝังค่าในโค้ด) ----------------
-API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
-SECRET  = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
+API_KEY  = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
+SECRET   = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
-SYMBOL = 'BTC-USDT-SWAP'   # คุณใช้อันนี้อยู่และ fetch ราคาได้จริงตาม log
+SYMBOL = 'BTC-USDT-SWAP'   # ใช้ตัวนี้กับ ccxt.okx ได้ (amount = จำนวน "contracts")
 
 # การจัดการทุน/ความเสี่ยง
 PORTFOLIO_PERCENTAGE = 0.80   # ใช้ทุนกี่ % ของ available
 LEVERAGE = 15                 # เลเวอเรจ
-SAFETY_PCT = 0.70             # กันชนเพิ่มจากสัดส่วนทุน (conservative)
-FIXED_BUFFER_USDT = 8.0       # กันเงินสดคงที่ (กันค่าธรรมเนียม/เศษต่าง ๆ)
-FEE_RATE_TAKER = 0.001        # ประมาณการ taker fee (0.10%) ให้เผื่อเยอะนิดเพื่อลด 51008
-HEADROOM = 0.85               # ยิงเริ่มต้นแค่ 90% ของ theoretical contracts
-RETRY_STEP = 0.80             # ลดสัญญาครั้งละ 20% ถ้าเจอ 51008
-MAX_RETRIES = 8               # ลดได้มากสุด 8 ครั้ง
+
+# กันไม่ให้ชน 51008 ง่าย
+SAFETY_PCT = 0.70            # กันชนเพิ่มจากสัดส่วนทุน (conservative)
+FIXED_BUFFER_USDT = 8.0      # กันเงินสดคงที่ (กันค่าธรรมเนียม/เศษต่าง ๆ)
+FEE_RATE_TAKER = 0.001       # ประมาณการ taker fee (0.10%)
+HEADROOM = 0.85              # ยิงต่ำกว่าทฤษฎี เช่น 85%
+
+# auto-retry ลดสัญญาเมื่อโดน 51008
+RETRY_STEP = 0.80            # ลดสัญญาครั้งละ 20%
+MAX_RETRIES = 8              # ลดได้มากสุด 8 ครั้ง
+
+# ยิงครั้งแรกอย่ายิงใหญ่ → ใช้ cap + แตกคำสั่งเป็นก้อนเล็ก
+MAX_FIRST_ORDER_CONTRACTS = 12  # เพดานครั้งแรก
+CHUNK_SIZE = 4                   # ยิงครั้งละกี่สัญญา
+CHUNK_PAUSE_SEC = 0.6            # เว้นจังหวะระหว่างก้อน (วินาที)
 
 # ---------------- LOGGER ----------------
 logging.basicConfig(
@@ -86,7 +95,6 @@ def get_current_price():
 def get_contract_size(symbol):
     """
     ดึง contractSize จากตลาด; ถ้าผิดปกติให้ fallback = 0.0001 (BTC perp)
-    ป้องกันบั๊กตัวแปร cs ที่ยังไม่กำหนด
     """
     try:
         markets = exchange.load_markets()
@@ -168,14 +176,14 @@ def calc_contracts_by_margin(avail_usdt: float, price: float, contract_size: flo
     logger.debug(f"✅ max_ct(final)={max_ct}")
     return max_ct
 
-def open_long(contracts: int, pos_mode: str):
+def open_long(contracts: int, pos_mode: str) -> bool:
     """
     เปิด Long แบบ One-way (ไม่ส่ง posSide) + auto-retry สำหรับ 51008
-    ถ้าเจอ posSide error (กรณีหลงส่งมาจาก hedge code) จะตัด posSide ทิ้งแล้วลองใหม่
+    คืนค่า True ถ้าสำเร็จ
     """
     if contracts <= 0:
         logger.warning("⚠️ Contracts <= 0 ไม่เปิดออเดอร์")
-        return
+        return False
 
     params = {'tdMode': 'cross'}  # One-way: ไม่ส่ง posSide
     current = int(contracts)
@@ -186,19 +194,19 @@ def open_long(contracts: int, pos_mode: str):
             logger.debug(f"🚀 ส่งคำสั่ง: {SYMBOL} market buy {current} (attempt {attempt+1})")
             order = exchange.create_order(SYMBOL, 'market', 'buy', current, None, params)
             logger.info(f"✅ เปิด Long สำเร็จ: {order}")
-            return
+            return True
         except ccxt.ExchangeError as e:
             msg = str(e)
             logger.error(f"❌ เปิด Long ไม่ได้: {msg}")
 
-            # ถ้ามี posSide error โผล่ (กันพลาด)
+            # กันกรณีโค้ดไปใส่ posSide มาโดยไม่ตั้งใจ
             if 'posSide' in msg or 'Position mode' in msg or '51000' in msg:
                 params.pop('posSide', None)
                 logger.warning("↻ ตัด posSide ออก (One-way) แล้วลองใหม่")
                 attempt += 1
                 continue
 
-            # เงินไม่พอ → ลดสัญญาแรงขึ้นตาม RETRY_STEP
+            # เงินไม่พอ → ลดสัญญา
             if '51008' in msg or 'Insufficient' in msg:
                 attempt += 1
                 next_ct = int(math.floor(current * RETRY_STEP))
@@ -206,42 +214,64 @@ def open_long(contracts: int, pos_mode: str):
                     next_ct = current - 1
                 if next_ct < 1:
                     logger.warning("⚠️ ลดจนต่ำกว่า 1 แล้ว ยกเลิก")
-                    return
+                    return False
                 logger.warning(f"↻ ลดสัญญาแล้วลองใหม่: {current} → {next_ct}")
                 current = next_ct
                 time.sleep(0.5)
                 continue
 
             # error อื่น หยุด
-            return
+            return False
         except Exception as e:
             logger.error(f"❌ เปิด Long ล้มเหลว (อื่น ๆ): {e}")
-            return
+            return False
+    return False
+
+def open_long_in_chunks(contracts: int, pos_mode: str):
+    """แตกเป็นก้อนเล็ก ๆ แล้วยิงต่อเนื่อง เพื่อลดโอกาสชน 51008"""
+    if contracts <= 0:
+        logger.warning("⚠️ Contracts <= 0 ไม่เปิดออเดอร์")
+        return
+
+    remaining = int(contracts)
+    while remaining > 0:
+        lot = min(remaining, CHUNK_SIZE)
+        ok = open_long(lot, pos_mode)
+        if not ok:
+            logger.warning("⚠️ หยุดแตกก้อน เพราะก้อนล่าสุดไม่ผ่าน (margin ไม่พอ)")
+            break
+        remaining -= lot
+        if remaining > 0:
+            logger.debug(f"⏳ เหลือ {remaining} contracts → พัก {CHUNK_PAUSE_SEC}s แล้วค่อยยิงต่อ")
+            time.sleep(CHUNK_PAUSE_SEC)
 
 # ---------------- MAIN ----------------
 if __name__ == "__main__":
-    # ตั้งเลเวอเรจก่อน
+    # 0) ตั้งเลเวอเรจก่อน
     set_leverage(LEVERAGE)
 
-    # ตรวจ mode (ใช้ one-way ก็ได้ค่า 'net_mode')
+    # 1) ตรวจ mode (One-way = 'net_mode')
     pos_mode = get_position_mode()
 
-    # 1) ยกเลิกคำสั่งค้างก่อน (ปล่อย ordFrozen)
+    # 2) ยกเลิกคำสั่งค้างก่อน (ปล่อย ordFrozen)
     cancel_all_open_orders(SYMBOL)
 
-    # 2) ดึงช่อง margin
+    # 3) ดึงช่อง margin
     avail, ord_frozen, imr, mmr = get_margin_channels()
     logger.info(f"🔍 Margin channels | avail={avail:.4f} | ordFrozen={ord_frozen:.4f} | imr={imr:.4f} | mmr={mmr:.4f}")
 
-    # 3) ใช้ avail_net เพื่อ sizing (ปกติ ordFrozen จะ 0 ถ้ายกเลิกหมดแล้ว)
+    # 4) ใช้ avail_net เพื่อ sizing
     avail_net = max(0.0, avail - ord_frozen)
     logger.info(f"🧮 ใช้ avail_net สำหรับ sizing = {avail_net:.4f} USDT")
 
-    # 4) ราคา + contract size
+    # 5) ราคา + contract size
     price = get_current_price()
     csize = get_contract_size(SYMBOL)
     logger.info(f"🫙 สรุปสถานะ | avail_net={avail_net:.4f} USDT | price={price} | contractSize={csize}")
 
-    # 5) คำนวณสัญญาแบบ conservative + headroom แล้วเปิด (auto-retry)
+    # 6) คำนวณสัญญาแบบ conservative + headroom
     contracts = calc_contracts_by_margin(avail_net, price, csize)
-    open_long(contracts, pos_mode)
+
+    # 7) เพดานครั้งแรก + แตกคำสั่งเป็นก้อนเล็ก
+    first_shot = min(contracts, MAX_FIRST_ORDER_CONTRACTS)
+    open_long_in_chunks(first_shot, pos_mode)
