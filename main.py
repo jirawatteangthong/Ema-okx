@@ -184,9 +184,21 @@ def notify_open(side, contracts, price):
     txt = f"🚀 OPEN {side.upper()} {contracts}\npx≈{price} | TF={TFM} | EMA {EMA_FAST}/{EMA_SLOW}"
     log.info(txt); tg(txt)
 
-def notify_close(side, contracts, entry_px, exit_px):
-    pnl = (exit_px - entry_px) if side=='long' else (entry_px - exit_px)
-    txt = f"✅ CLOSE {side.upper()} {contracts}\nentry≈{entry_px} exit≈{exit_px}\nPnL/contract≈{pnl:.2f}"
+# --- NEW: แจ้งตอนเลื่อน SL ---
+def notify_sl_move(side, old_sl, new_sl, reason):  # <-- NEW
+    emoji = "🛡️" if reason == 'BE' else "🌀"  # BE=กันทุน, TRAIL=ตามเทรนด์
+    txt = f"{emoji} {side.upper()} SL moved ({reason}) {old_sl:.1f} → {new_sl:.1f}"
+    log.info(txt); tg(txt)
+
+# --- NEW: ปิดโพซิชัน พร้อมระบุ TP หรือ SL และคำนวณ PnL เป็น USDT ---
+def notify_close(side, contracts, entry_px, exit_px, contract_size, reason):  # <-- NEW
+    price_diff = (exit_px - entry_px) if side == 'long' else (entry_px - exit_px)
+    pnl_per_contract = price_diff * contract_size
+    pnl_total = pnl_per_contract * contracts
+    flag = "🎉 TP" if reason == 'TP' else "🔥 SL"
+    txt = (f"✅ CLOSE {side.upper()} {contracts} | {flag}\n"
+           f"entry≈{entry_px} exit≈{exit_px}\n"
+           f"PnL/contract≈{pnl_per_contract:.2f} USDT | Total≈{pnl_total:.2f} USDT")
     log.info(txt); tg(txt)
 
 def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
@@ -224,6 +236,7 @@ if __name__ == "__main__":
     high_water = None  # long
     low_water  = None  # short
     armed_side = None  # 'long'|'short'
+    curr_sl = None     # <-- NEW: เก็บ SL ปัจจุบันเพื่อแจ้งเมื่อขยับ
 
     while True:
         try:
@@ -246,27 +259,85 @@ if __name__ == "__main__":
                 if pos_side == 'long':
                     tp = entry_px + TP_POINTS
                     base_sl = entry_px - SL_POINTS
+
+                    # อัปเดต high_water
                     high_water = price if high_water is None else max(high_water, price)
-                    trail_sl = max(entry_px + BE_OFFSET, high_water - TRAIL_POINTS)
-                    eff_sl = max(base_sl, trail_sl)
-                    if price >= tp or price <= eff_sl:
+
+                    # เปิดใช้งาน BE/Trail เมื่อกำไรถึงเกณฑ์
+                    be_active = high_water >= entry_px + BE_OFFSET
+                    trail_active = high_water >= entry_px + TRAIL_POINTS
+
+                    # รวม candidate ของ SL
+                    eff_sl_candidates = [base_sl]
+                    if be_active:
+                        eff_sl_candidates.append(entry_px + BE_OFFSET)
+                    if trail_active:
+                        eff_sl_candidates.append(high_water - TRAIL_POINTS)
+
+                    eff_sl = max(eff_sl_candidates)
+
+                    # แจ้งเมื่อ SL ถูกยกขึ้น
+                    if curr_sl is None:
+                        curr_sl = base_sl  # ตั้งต้นเป็น base ก่อน
+                    if eff_sl > curr_sl + 1e-9:  # มีการยก SL จริง
+                        reason = 'TRAIL' if trail_active and abs(eff_sl - (high_water - TRAIL_POINTS)) < 1e-9 else 'BE'
+                        notify_sl_move('long', curr_sl, eff_sl, reason)  # <-- NEW
+                        curr_sl = eff_sl
+
+                    # ปิดเมื่อชน TP หรือ SL
+                    if price >= tp:
                         o = close_market('long', pos_ct)
-                        notify_close('long', pos_ct, entry_px, price)
+                        notify_close('long', pos_ct, entry_px, price, contract_size, reason='TP')  # <-- NEW
                         cancel_all_open_orders()
-                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None; high_water=None; low_water=None
-                        armed_side = None  # กลับไปเช็คฝั่งใหม่
-                else:
+                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None
+                        high_water=None; low_water=None; armed_side=None; curr_sl=None
+                    elif price <= eff_sl:
+                        o = close_market('long', pos_ct)
+                        notify_close('long', pos_ct, entry_px, price, contract_size, reason='SL')  # <-- NEW
+                        cancel_all_open_orders()
+                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None
+                        high_water=None; low_water=None; armed_side=None; curr_sl=None
+
+                else:  # short
                     tp = entry_px - TP_POINTS
                     base_sl = entry_px + SL_POINTS
+
+                    # อัปเดต low_water
                     low_water = price if low_water is None else min(low_water, price)
-                    trail_sl = min(entry_px - BE_OFFSET, low_water + TRAIL_POINTS)
-                    eff_sl = min(base_sl, trail_sl)
-                    if price <= tp or price >= eff_sl:
+
+                    # เปิดใช้งาน BE/Trail เมื่อกำไรถึงเกณฑ์
+                    be_active = low_water <= entry_px - BE_OFFSET
+                    trail_active = (entry_px - low_water) >= TRAIL_POINTS
+
+                    eff_sl_candidates = [base_sl]
+                    if be_active:
+                        eff_sl_candidates.append(entry_px - BE_OFFSET)
+                    if trail_active:
+                        eff_sl_candidates.append(low_water + TRAIL_POINTS)
+
+                    eff_sl = min(eff_sl_candidates)
+
+                    # แจ้งเมื่อ SL ถูกลดลง (สำหรับ short การขยับ SL = ลดราคา SL ลง)
+                    if curr_sl is None:
+                        curr_sl = base_sl
+                    if eff_sl < curr_sl - 1e-9:
+                        reason = 'TRAIL' if trail_active and abs(eff_sl - (low_water + TRAIL_POINTS)) < 1e-9 else 'BE'
+                        notify_sl_move('short', curr_sl, eff_sl, reason)  # <-- NEW
+                        curr_sl = eff_sl
+
+                    # ปิดเมื่อชน TP หรือ SL
+                    if price <= tp:
                         o = close_market('short', pos_ct)
-                        notify_close('short', pos_ct, entry_px, price)
+                        notify_close('short', pos_ct, entry_px, price, contract_size, reason='TP')  # <-- NEW
                         cancel_all_open_orders()
-                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None; high_water=None; low_water=None
-                        armed_side = None
+                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None
+                        high_water=None; low_water=None; armed_side=None; curr_sl=None
+                    elif price >= eff_sl:
+                        o = close_market('short', pos_ct)
+                        notify_close('short', pos_ct, entry_px, price, contract_size, reason='SL')  # <-- NEW
+                        cancel_all_open_orders()
+                        in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None
+                        high_water=None; low_water=None; armed_side=None; curr_sl=None
 
             # เปิดออเดอร์ทันทีเมื่อ cross ตรงกับฝั่งที่ arm
             if not in_pos and armed_side:
@@ -287,6 +358,7 @@ if __name__ == "__main__":
                         entry_px = price
                         high_water = price if pos_side == 'long' else None
                         low_water  = price if pos_side == 'short' else None
+                        curr_sl = None  # เริ่มใหม่ (จะตั้ง base ในลูปจัดการ)  # <-- NEW
                         notify_open(pos_side, pos_ct, entry_px)
 
             # พิมพ์สถานะทุก ๆ รอบตาม interval
