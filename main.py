@@ -6,18 +6,17 @@ import ccxt
 import logging
 import traceback
 
-# ---------- CONFIG (env) ----------
+# ---------- CONFIG (ENV) ----------
 API_KEY   = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET    = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD  = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
-SYMBOL    = os.getenv('SYMBOL', 'BTC-USDT-SWAP')
 
-LEVERAGE               = int(os.getenv('LEVERAGE', '15'))
-PORTFOLIO_PERCENTAGE   = float(os.getenv('PORTFOLIO_PERCENTAGE', '0.80'))  # ใช้กี่ % ของ margin
-OPEN_ON_START          = os.getenv('OPEN_ON_START', 'true').lower() == 'true'  # เปิด Long ตอนสตาร์ท 1 ครั้ง
-REOPEN_EVERY_MINUTES   = int(os.getenv('REOPEN_EVERY_MINUTES', '0'))  # 0 = ไม่เปิดซ้ำอัตโนมัติ
-MIN_CONTRACTS          = int(os.getenv('MIN_CONTRACTS', '1'))         # ขั้นต่ำ 1 สัญญา
-LOOP_SLEEP_SECONDS     = int(os.getenv('LOOP_SLEEP_SECONDS', '30'))    # จังหวะ heartbeat
+SYMBOL     = os.getenv('SYMBOL', 'BTC/USDT:USDT')  # unified symbol สำหรับ ccxt
+SYMBOL_ID  = os.getenv('SYMBOL_ID', 'BTC-USDT-SWAP')  # instId ของ OKX API
+LEVERAGE   = int(os.getenv('LEVERAGE', '15'))
+PORTFOLIO_PERCENTAGE = float(os.getenv('PORTFOLIO_PERCENTAGE', '0.80'))
+MIN_CONTRACTS = int(os.getenv('MIN_CONTRACTS', '1'))
+LOOP_SLEEP_SECONDS = int(os.getenv('LOOP_SLEEP_SECONDS', '30'))
 
 # ---------- LOGGER ----------
 logging.basicConfig(
@@ -34,9 +33,10 @@ exchange = ccxt.okx({
     'enableRateLimit': True,
     'options': {'defaultType': 'swap'}
 })
+exchange.verbose = False  # 🔒 กัน API Key หลุดใน log
 
-# ---------- HELPERS ----------
-def validate_api_and_load_markets():
+# ---------- FUNCTIONS ----------
+def validate_api_and_resolve_market():
     try:
         if (not API_KEY or not SECRET or not PASSWORD or
             'YOUR_OKX_API_KEY_HERE' in API_KEY or
@@ -46,14 +46,16 @@ def validate_api_and_load_markets():
             sys.exit(1)
 
         markets = exchange.load_markets()
-        if SYMBOL not in markets:
-            logger.error(f"❌ ไม่พบสัญลักษณ์ {SYMBOL} ในตลาด OKX")
-            sys.exit(1)
-        logger.debug("✅ load_markets ผ่าน")
+        market = None
+        if SYMBOL in markets:
+            market = markets[SYMBOL]
+        elif SYMBOL_ID and hasattr(exchange, 'markets_by_id') and SYMBOL_ID in exchange.markets_by_id:
+            market = exchange.markets_by_id[SYMBOL_ID]
+        else:
+            raise ccxt.BadSymbol(f"ไม่พบสัญลักษณ์ (unified='{SYMBOL}', id='{SYMBOL_ID}')")
 
-        # ทดสอบ fetch_balance เพื่อยืนยันสิทธิ์ API
-        b = exchange.fetch_balance({'type': 'swap'})
-        logger.debug(f"✅ API พร้อมใช้งาน (fetch_balance ผ่าน): {b.get('info')}")
+        logger.info(f"✅ ใช้ตลาด: {market['symbol']} (id={market['id']})")
+        return market
     except ccxt.AuthenticationError as e:
         logger.error(f"❌ AuthenticationError: API Key/Secret/Passphrase ไม่ถูกต้องหรือสิทธิ์ไม่พอ | {e}")
         logger.debug(traceback.format_exc())
@@ -63,185 +65,100 @@ def validate_api_and_load_markets():
         logger.debug(traceback.format_exc())
         sys.exit(1)
 
-def get_available_margin_usdt() -> float:
-    """ดึง USDT ที่ใช้ได้ใน Futures Cross จาก availBal (รองรับ payload หลายแบบ)"""
+def get_available_margin_usdt():
     try:
         bal = exchange.fetch_balance({'type': 'swap'})
-        info = bal.get('info', {})
-        logger.debug(f"📦 Raw Balance Info: {info}")
-        data = (info.get('data') or [])
+        data = (bal.get('info', {}).get('data') or [])
         if not data:
             return 0.0
-
         first = data[0]
         details = first.get('details')
-
-        # 1) ปกติอยู่ใน details (list per-ccy)
         if isinstance(details, list):
             for item in details:
                 if item.get('ccy') == 'USDT':
                     raw = item.get('availBal') or item.get('cashBal') or item.get('eq') or "0"
-                    val = float(raw) if str(raw).strip() else 0.0
-                    logger.debug(f"💰 Available Margin via details.availBal: {val}")
-                    return val
-
-        # 2) บางบัญชีไม่มี details → อ่านจากชั้นบน
+                    return float(raw) if str(raw).strip() else 0.0
         for key in ['availBal', 'cashBal', 'crossEq', 'availEq', 'eq']:
-            raw = first.get(key)
-            if raw is not None and str(raw).strip():
-                try:
-                    val = float(raw)
-                    logger.debug(f"💰 Available Margin via {key}: {val}")
-                    return val
-                except:
-                    pass
-
-        logger.warning("⚠️ ไม่พบ USDT availBal/cashBal/crossEq/availEq/eq")
+            if key in first and str(first.get(key)).strip():
+                return float(first.get(key))
         return 0.0
     except Exception as e:
         logger.error(f"❌ ดึง available margin ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
         return 0.0
 
-def get_contract_size(symbol: str) -> float:
-    try:
-        m = exchange.market(symbol)
-        size = float(m.get('contractSize') or 0.0)
-        if size <= 0:
-            size = 0.0001  # BTC-USDT-SWAP โดยทั่วไป
-            logger.warning(f"⚠️ contractSize ไม่เจอ ใช้ fallback {size}")
-        else:
-            logger.debug(f"📐 contractSize = {size} BTC/contract")
-        return size
-    except Exception as e:
-        logger.error(f"❌ ดึง contractSize ไม่ได้: {e}")
-        logger.debug(traceback.format_exc())
-        return 0.0001
-
-def get_price(symbol: str) -> float:
+def get_price(symbol):
     try:
         t = exchange.fetch_ticker(symbol)
-        p = float(t['last'])
-        logger.debug(f"📈 Price {symbol}: {p}")
-        return p
+        return float(t['last'])
     except Exception as e:
         logger.error(f"❌ ดึงราคาไม่ได้: {e}")
         logger.debug(traceback.format_exc())
         return 0.0
 
-def set_cross_leverage(leverage: int):
+def get_contract_size(market):
     try:
-        res = exchange.set_leverage(leverage, SYMBOL, params={'mgnMode': 'cross'})
+        size = float(market.get('contractSize') or 0.0)
+        return size if size > 0 else 0.0001
+    except:
+        return 0.0001
+
+def set_cross_leverage(market, leverage):
+    try:
+        res = exchange.set_leverage(leverage, market['symbol'], params={'mgnMode': 'cross'})
         logger.info(f"🔧 ตั้ง Leverage {leverage}x สำเร็จ: {res}")
-    except ccxt.ExchangeError as e:
+    except Exception as e:
         logger.error(f"❌ ตั้ง Leverage ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
-        # ไม่ exit เพื่อให้ service ไม่ crash; จะลองใหม่รอบถัดไป
-        raise
 
-def calc_contracts(available_usdt: float, price: float, contract_size_btc: float) -> int:
-    try:
-        if price <= 0 or contract_size_btc <= 0:
-            return 0
-        target_notional = available_usdt * PORTFOLIO_PERCENTAGE * LEVERAGE  # ใช้ margin พร้อม leverage
-        target_btc = target_notional / price
-        contracts = math.floor(target_btc / contract_size_btc)
-        logger.debug(
-            f"📊 Calc | avail={available_usdt:.4f} USDT, pct={PORTFOLIO_PERCENTAGE}, lev={LEVERAGE}, "
-            f"notional={target_notional:.4f}, target_btc={target_btc:.8f}, size={contract_size_btc}, "
-            f"contracts={contracts}"
-        )
-        return max(0, int(contracts))
-    except Exception as e:
-        logger.error(f"❌ คำนวณสัญญาไม่ได้: {e}")
-        logger.debug(traceback.format_exc())
+def calc_contracts(avail_usdt, price, contract_size):
+    if price <= 0 or contract_size <= 0:
         return 0
+    target_notional = avail_usdt * PORTFOLIO_PERCENTAGE * LEVERAGE
+    target_btc = target_notional / price
+    contracts = math.floor(target_btc / contract_size)
+    logger.debug(f"📊 Calc: avail={avail_usdt} price={price} size={contract_size} contracts={contracts}")
+    return contracts
 
-def open_long(contracts: int):
+def open_long(market, contracts):
     if contracts < MIN_CONTRACTS:
-        logger.warning(f"⚠️ Contracts < {MIN_CONTRACTS}: {contracts} ไม่เปิดออเดอร์")
-        return False
-
-    params = {'tdMode': 'cross', 'posSide': 'long'}  # ถ้าไม่ใช่ Hedge จะ fallback
+        logger.warning(f"⚠️ Contracts < {MIN_CONTRACTS} ไม่เปิดออเดอร์")
+        return
+    params = {'tdMode': 'cross', 'posSide': 'long'}
     try:
-        logger.debug(f"🚀 ส่งคำสั่ง (with posSide): {SYMBOL}, market, buy, {contracts}, {params}")
-        order = exchange.create_order(SYMBOL, 'market', 'buy', contracts, None, params)
+        order = exchange.create_order(market['symbol'], 'market', 'buy', contracts, None, params)
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
-        return True
     except ccxt.InvalidOrder as e:
-        msg = str(e)
-        logger.error(f"❌ InvalidOrder: {msg}")
-        logger.debug(traceback.format_exc())
-        if 'posSide' in msg or 'hedge' in msg.lower() or 'Position mode' in msg:
-            try:
-                params2 = {'tdMode': 'cross'}
-                logger.warning("↻ ลองใหม่แบบไม่ใส่ posSide (บัญชีอาจไม่ได้เปิด Hedge Mode)")
-                order = exchange.create_order(SYMBOL, 'market', 'buy', contracts, None, params2)
-                logger.info(f"✅ เปิด Long สำเร็จ (fallback): {order}")
-                return True
-            except Exception as e2:
-                logger.error(f"❌ เปิด Long (fallback) ไม่ได้: {e2}")
-                logger.debug(traceback.format_exc())
-                return False
-        return False
+        if 'posSide' in str(e) or 'hedge' in str(e).lower():
+            logger.warning("↻ ลองใหม่แบบไม่ใส่ posSide")
+            order = exchange.create_order(market['symbol'], 'market', 'buy', contracts, None, {'tdMode': 'cross'})
+            logger.info(f"✅ เปิด Long สำเร็จ (fallback): {order}")
+        else:
+            logger.error(f"❌ InvalidOrder: {e}")
+            logger.debug(traceback.format_exc())
     except Exception as e:
         logger.error(f"❌ เปิด Long ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
-        return False
 
-# ---------- MAIN LOOP ----------
+# ---------- MAIN ----------
 def main():
-    logger.info("🚀 เริ่มบอทบน Railway (keep-alive loop)")
-    validate_api_and_load_markets()
-
-    opened_once = False
-    last_open_ts = 0.0
-    backoff = 5  # วินาที (จะเพิ่มเมื่อเจอ error เพื่อกันลูปเด้งรัว)
-
+    market = validate_api_and_resolve_market()
     while True:
         try:
-            price = get_price(SYMBOL)
+            price = get_price(market['symbol'])
             avail = get_available_margin_usdt()
-            size  = get_contract_size(SYMBOL)
-
-            logger.info(f"🫙 สรุปสถานะ | avail={avail:.4f} USDT | price={price} | contractSize={size}")
-
-            # ตั้ง leverage ทุก ๆ รอบแรก หรือทุก 30 นาที (กันโดน reset)
-            try:
-                set_cross_leverage(LEVERAGE)
-            except Exception:
-                logger.warning("⚠️ ตั้ง Leverage รอบนี้ไม่สำเร็จ (จะลองใหม่อัตโนมัติรอบถัดไป)")
-
-            # ตัดสินใจเปิด Long
-            should_open = False
-            if OPEN_ON_START and not opened_once:
-                should_open = True
-            elif REOPEN_EVERY_MINUTES > 0 and (time.time() - last_open_ts) >= (REOPEN_EVERY_MINUTES * 60):
-                should_open = True
-
-            if should_open:
-                contracts = calc_contracts(avail, price, size)
-                if contracts >= MIN_CONTRACTS:
-                    ok = open_long(contracts)
-                    if ok:
-                        opened_once = True
-                        last_open_ts = time.time()
-                else:
-                    logger.warning(
-                        f"⚠️ ได้ contracts={contracts} < {MIN_CONTRACTS} "
-                        f"(ลองเพิ่ม LEVERAGE/PORTFOLIO_PERCENTAGE หรือเติม USDT เข้าบัญชี Futures)"
-                    )
-
-            # reset backoff เมื่อทุกอย่างปกติ
-            backoff = 5
-
-        except Exception as loop_err:
-            logger.error(f"❌ Loop error: {loop_err}")
+            contract_size = get_contract_size(market)
+            logger.info(f"🫙 สรุปสถานะ | avail={avail:.4f} USDT | price={price} | contractSize={contract_size}")
+            set_cross_leverage(market, LEVERAGE)
+            contracts = calc_contracts(avail, price, contract_size)
+            if contracts >= MIN_CONTRACTS:
+                open_long(market, contracts)
+            else:
+                logger.warning(f"⚠️ ได้ contracts={contracts} < {MIN_CONTRACTS}")
+        except Exception as e:
+            logger.error(f"❌ Loop error: {e}")
             logger.debug(traceback.format_exc())
-            backoff = min(backoff * 2, 300)  # เพิ่มเป็น 10/20/... สูงสุด 300 วิ
-
-        # keep-alive
-        time.sleep(max(LOOP_SLEEP_SECONDS, backoff))
+        time.sleep(LOOP_SLEEP_SECONDS)
 
 if __name__ == "__main__":
     main()
