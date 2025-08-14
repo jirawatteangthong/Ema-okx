@@ -126,24 +126,33 @@ def calc_contracts(avail_usdt, price, contract_size):
 
 def open_long(market, contracts):
     if contracts < MIN_CONTRACTS:
-        logger.warning(f"⚠️ Contracts < {MIN_CONTRACTS} ไม่เปิดออเดอร์")
+        logger.warning(f"⚠️ Contracts < {MIN_CONTRACTS}: {contracts} ไม่เปิดออเดอร์")
         return
-    params = {'tdMode': 'cross', 'posSide': 'long'}
+
+    params = {'tdMode': 'cross', 'posSide': 'long'}  # ลองส่งแบบ Hedge ก่อน
     try:
+        logger.debug(f"🚀 ส่งคำสั่ง (with posSide): {market['symbol']}, market, buy, {contracts}, {params}")
         order = exchange.create_order(market['symbol'], 'market', 'buy', contracts, None, params)
         logger.info(f"✅ เปิด Long สำเร็จ: {order}")
-    except ccxt.InvalidOrder as e:
-        if 'posSide' in str(e) or 'hedge' in str(e).lower():
-            logger.warning("↻ ลองใหม่แบบไม่ใส่ posSide")
-            order = exchange.create_order(market['symbol'], 'market', 'buy', contracts, None, {'tdMode': 'cross'})
-            logger.info(f"✅ เปิด Long สำเร็จ (fallback): {order}")
-        else:
-            logger.error(f"❌ InvalidOrder: {e}")
-            logger.debug(traceback.format_exc())
+        return
+    except (ccxt.InvalidOrder, ccxt.ExchangeError) as e:
+        msg = str(e)
+        logger.error(f"❌ เปิด Long ล้มเหลว: {msg}")
+        # ถ้าเป็นปัญหา posSide ให้ลองใหม่โดยไม่ส่ง posSide
+        if ('posSide' in msg) or ('Position mode' in msg) or ('hedge' in msg.lower()) or ('51000' in msg):
+            try:
+                logger.warning("↻ ลองใหม่แบบไม่ใส่ posSide (บัญชีอยู่ใน One-way/Net mode)")
+                params2 = {'tdMode': 'cross'}
+                order = exchange.create_order(market['symbol'], 'market', 'buy', contracts, None, params2)
+                logger.info(f"✅ เปิด Long สำเร็จ (fallback no posSide): {order}")
+                return
+            except Exception as e2:
+                logger.error(f"❌ เปิด Long (fallback) ไม่ได้: {e2}")
+                return
+        # ถ้าไม่ใช่เคส posSide ก็ปล่อย error ตามปกติ
+        raise
     except Exception as e:
-        logger.error(f"❌ เปิด Long ไม่ได้: {e}")
-        logger.debug(traceback.format_exc())
-
+        logger.error(f"❌ เปิด Long ไม่ได้ (อื่น ๆ): {e}")
 # ---------- MAIN ----------
 def main():
     market = validate_api_and_resolve_market()
