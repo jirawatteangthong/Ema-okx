@@ -11,10 +11,9 @@ SECRET   = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 SYMBOL = 'BTC-USDT-SWAP'           # OKX USDT Perp | amount = #contracts
-# พิมพ์สถานะทุกๆ รอบเช็ค (True/False)
-LOG_EVERY_TICK = True
-# EMA settings (ปรับได้)
-TFM = os.getenv('TFM', '15m')
+
+# EMA settings (ค่าเริ่มตามที่ขอ)
+TFM = os.getenv('TFM', '15m')      # '1m','5m','15m','1h',...
 EMA_FAST = int(os.getenv('EMA_FAST', '50'))
 EMA_SLOW = int(os.getenv('EMA_SLOW', '200'))
 
@@ -26,10 +25,10 @@ FEE_RATE_TAKER = 0.001
 FIXED_BUFFER_USDT = 2.0            # กันเศษเล็กน้อย
 
 # TP/SL/Trailing (ปรับได้)
-TP_POINTS = float(os.getenv('TP_POINTS', '300'))
-SL_POINTS = float(os.getenv('SL_POINTS', '500'))
-TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '200'))
-BE_OFFSET = float(os.getenv('BE_OFFSET', '50'))
+TP_POINTS = float(os.getenv('TP_POINTS', '300'))     # +300 จุด
+SL_POINTS = float(os.getenv('SL_POINTS', '500'))     # -500 จุด
+TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '300'))
+BE_OFFSET = float(os.getenv('BE_OFFSET', '50'))      # กันทุน +50
 
 # Loop interval
 POLL_INTERVAL_SECONDS = float(os.getenv('POLL_INTERVAL_SECONDS', '3'))
@@ -37,6 +36,9 @@ POLL_INTERVAL_SECONDS = float(os.getenv('POLL_INTERVAL_SECONDS', '3'))
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID   = os.getenv('TELEGRAM_CHAT_ID', '')
+
+# Log ทุกติ๊ก
+LOG_EVERY_TICK = True
 
 # ================== LOGGER ==================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -61,22 +63,6 @@ def tg(msg: str):
         requests.post(url, json={'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
     except Exception as e:
         log.warning(f"Telegram send failed: {e}")
-
-def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
-    """
-    พิมพ์สถานะทุกๆ รอบเช็ค:
-    - ถ้าไม่มีโพซิชัน → บอกฝั่งที่ arm + ค่า EMA
-    - ถ้ามีโพซิชัน → บอกฝั่ง/ราคา/EMA เพื่อดูภาพรวม
-    """
-    try:
-        side_txt = 'NONE' if armed_side is None else armed_side.upper()
-        if not in_pos:
-            log.info(f"📊 Waiting... side={side_txt} | fast={f_now:.2f} | slow={s_now:.2f}")
-        else:
-            log.info(f"📊 In-Position {pos_side.upper()} | px≈{price:.2f} | fast={f_now:.2f} | slow={s_now:.2f}")
-    except Exception:
-        # กัน format error เวลาค่าเป็น None
-        pass
 
 def set_isolated_leverage():
     try:
@@ -146,7 +132,7 @@ def calc_contracts(price: float, contract_size: float, avail_net: float) -> int:
 def fetch_ema_set():
     """return (fast_prev, slow_prev, fast_now, slow_now)"""
     try:
-        limit = max(EMA_SLOW + 5, 60)
+        limit = max(EMA_SLOW + 5, 400)  # พอสำหรับ EMA200
         ohlcv = exchange.fetch_ohlcv(SYMBOL, timeframe=TFM, limit=limit)
         closes = [c[4] for c in ohlcv]
         if len(closes) < EMA_SLOW + 2:
@@ -203,41 +189,59 @@ def notify_close(side, contracts, entry_px, exit_px):
     txt = f"✅ CLOSE {side.upper()} {contracts}\nentry≈{entry_px} exit≈{exit_px}\nPnL/contract≈{pnl:.2f}"
     log.info(txt); tg(txt)
 
-# ================== MAIN (Armed Cross Logic + Trailing) ==================
+def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
+    try:
+        side_txt = 'NONE' if armed_side is None else armed_side.upper()
+        if not in_pos:
+            log.info(f"📊 Waiting... side={side_txt} | fast={f_now:.2f} | slow={s_now:.2f}")
+        else:
+            log.info(f"📊 In-Position {pos_side.upper()} | px≈{price:.2f} | fast={f_now:.2f} | slow={s_now:.2f}")
+    except Exception:
+        pass
+
+# ================== MAIN (Armed Cross + Trailing) ==================
 if __name__ == "__main__":
-    tg("🤖 เริ่มบอท EMA okx")
+    # เริ่มงาน + แสดงหัว log ตามที่ต้องการ
+    tg("🤖 บอทเริ่มทำงาน 💰")
+    log.info("🤖 บอทเริ่มทำงาน 💰")
     set_isolated_leverage()
     cancel_all_open_orders()
     contract_size = get_contract_size()
+
+    # ดึงยอดเริ่มต้นและ EMA เพื่อพิมพ์ตาม format
+    start_balance = get_avail_net_usdt()
+    f_prev, s_prev, f_now, s_now = fetch_ema_set()
+    log.info(f"💰 ยอดเริ่มต้น ≈ {start_balance:.2f} USDT")
+    log.info(f"📉Ema{EMA_FAST}/{EMA_SLOW} | fast={f_now if f_now else 0:.2f} | slow={s_now if s_now else 0:.2f}")
+    log.info(f"🎉TP +{TP_POINTS} | 🔥SL -{SL_POINTS} | 🌀Trail {TRAIL_POINTS} | 🛡️BE +{BE_OFFSET}")
+    log.info("🔍 กำลังรอเปิดออเดอร์...")
 
     # สถานะภายใน
     in_pos = False
     pos_side = 'flat'
     pos_ct = 0
     entry_px = None
-    high_water = None  # สำหรับ long
-    low_water = None   # สำหรับ short
-
-    # ขั้นตอนที่ 1: ตอนรันบอท "เช็คว่า EMA อยู่ฝั่งไหน" เพื่อ arm
-    # - ถ้า fast < slow → เตรียมเปิดเฉพาะ long (รอ cross up)
-    # - ถ้า fast > slow → เตรียมเปิดเฉพาะ short (รอ cross down)
-    armed_side = None   # 'long' หรือ 'short'
+    high_water = None  # long
+    low_water  = None  # short
+    armed_side = None  # 'long'|'short'
 
     while True:
         try:
             f_prev, s_prev, f_now, s_now = fetch_ema_set()
             if None in (f_prev, s_prev, f_now, s_now):
+                if LOG_EVERY_TICK:
+                    log_tick_status(armed_side, f_now or 0.0, s_now or 0.0, in_pos, pos_side, get_price())
                 time.sleep(POLL_INTERVAL_SECONDS); continue
 
             price = get_price()
             avail_net = get_avail_net_usdt()
 
-            # อัปเดตฝั่งที่ arm ถ้ายังไม่กำหนด หรือเพิ่งปิดโพซิชันไป
+            # กำหนดฝั่งที่ arm เมื่อยังไม่ตั้ง หรือหลังปิดออเดอร์
             if armed_side is None and not in_pos:
                 armed_side = 'long' if f_now < s_now else 'short'
                 log.info(f"🎯 Armed side: {armed_side.upper()} (fast={f_now:.2f}, slow={s_now:.2f})")
 
-            # ถ้ามีโพซิชันอยู่ → จัดการ TP/SL/Trailing
+            # จัดการ TP/SL/Trailing เมื่อมีโพซิชัน
             if in_pos:
                 if pos_side == 'long':
                     tp = entry_px + TP_POINTS
@@ -246,57 +250,51 @@ if __name__ == "__main__":
                     trail_sl = max(entry_px + BE_OFFSET, high_water - TRAIL_POINTS)
                     eff_sl = max(base_sl, trail_sl)
                     if price >= tp or price <= eff_sl:
-                        side_to_close = 'long'
-                        o = close_market(side_to_close, pos_ct)
-                        notify_close(side_to_close, pos_ct, entry_px, price)
+                        o = close_market('long', pos_ct)
+                        notify_close('long', pos_ct, entry_px, price)
                         cancel_all_open_orders()
-                        # reset state + กลับไปขั้นตอน 1 (arm ใหม่)
                         in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None; high_water=None; low_water=None
-                        armed_side = None  # บังคับให้เช็คฝั่งใหม่
-                else:  # short
+                        armed_side = None  # กลับไปเช็คฝั่งใหม่
+                else:
                     tp = entry_px - TP_POINTS
                     base_sl = entry_px + SL_POINTS
                     low_water = price if low_water is None else min(low_water, price)
                     trail_sl = min(entry_px - BE_OFFSET, low_water + TRAIL_POINTS)
                     eff_sl = min(base_sl, trail_sl)
                     if price <= tp or price >= eff_sl:
-                        side_to_close = 'short'
-                        o = close_market(side_to_close, pos_ct)
-                        notify_close(side_to_close, pos_ct, entry_px, price)
+                        o = close_market('short', pos_ct)
+                        notify_close('short', pos_ct, entry_px, price)
                         cancel_all_open_orders()
                         in_pos = False; pos_side='flat'; pos_ct=0; entry_px=None; high_water=None; low_water=None
-                        armed_side = None  # บังคับให้เช็คฝั่งใหม่
+                        armed_side = None
 
-            # ถ้าไม่มีโพซิชันอยู่ → รอสัญญาณ cross "ตามฝั่งที่ arm ไว้" เท่านั้น
+            # เปิดออเดอร์ทันทีเมื่อ cross ตรงกับฝั่งที่ arm
             if not in_pos and armed_side:
                 cross_up   = (f_prev <= s_prev) and (f_now > s_now)
                 cross_down = (f_prev >= s_prev) and (f_now < s_now)
-
-                should_open = (
-                    (armed_side == 'long'  and cross_up) or
-                    (armed_side == 'short' and cross_down)
-                )
-
+                should_open = ((armed_side == 'long' and cross_up) or
+                               (armed_side == 'short' and cross_down))
                 if should_open:
                     contracts = calc_contracts(price, contract_size, avail_net)
                     if contracts < 1:
-                        log.warning("Margin ไม่พอเปิด 1 สัญญา");  time.sleep(POLL_INTERVAL_SECONDS); continue
-                    side = 'buy' if armed_side == 'long' else 'sell'
-                    order = open_market(side, contracts)
-                    in_pos = True
-                    pos_side = 'long' if side == 'buy' else 'short'
-                    pos_ct = contracts
-                    entry_px = price
-                    high_water = price if pos_side == 'long' else None
-                    low_water  = price if pos_side == 'short' else None
-                    notify_open(pos_side, pos_ct, entry_px)
-                    # หลังเปิด ห้ามเปิดเพิ่ม จนกว่าจะปิดและ arm ใหม่
-                # 🔽 เพิ่มตรงนี้
-                if LOG_EVERY_TICK:
-                    log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price)
+                        log.warning("Margin ไม่พอเปิด 1 สัญญา")
+                    else:
+                        side = 'buy' if armed_side == 'long' else 'sell'
+                        order = open_market(side, contracts)
+                        in_pos = True
+                        pos_side = 'long' if side == 'buy' else 'short'
+                        pos_ct = contracts
+                        entry_px = price
+                        high_water = price if pos_side == 'long' else None
+                        low_water  = price if pos_side == 'short' else None
+                        notify_open(pos_side, pos_ct, entry_px)
 
-                time.sleep(POLL_INTERVAL_SECONDS)
+            # พิมพ์สถานะทุก ๆ รอบตาม interval
+            if LOG_EVERY_TICK:
+                log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price)
 
-            except Exception as e:
-                log.error(f"Loop error: {e}")
-                time.sleep(POLL_INTERVAL_SECONDS)
+        except Exception as e:
+            log.error(f"Loop error: {e}")
+
+        # sleep จุดเดียวท้ายลูป
+        time.sleep(POLL_INTERVAL_SECONDS)
