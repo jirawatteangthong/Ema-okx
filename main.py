@@ -12,10 +12,10 @@ SYMBOL = 'BTC-USDT-SWAP'
 
 PORTFOLIO_PERCENTAGE = 0.80
 LEVERAGE = 15
-SAFETY_PCT = float(os.getenv('SAFETY_PCT', '0.8'))
-FIXED_BUFFER_USDT = float(os.getenv('FIXED_BUFFER_USDT', '3.0'))
+SAFETY_PCT = float(os.getenv('SAFETY_PCT', '0.75'))
+FIXED_BUFFER_USDT = float(os.getenv('FIXED_BUFFER_USDT', '5.0'))
 FEE_RATE_TAKER = float(os.getenv('FEE_RATE_TAKER', '0.0005'))
-RETRY_STEP  = float(os.getenv('RETRY_STEP', '0.85'))
+RETRY_STEP  = float(os.getenv('RETRY_STEP', '0.8'))
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
 
 # ---------------- LOGGER ----------------
@@ -73,13 +73,12 @@ def get_current_price():
 def get_contract_size(symbol):
     try:
         markets = exchange.load_markets()
-        market = markets.get(symbol)
-        if market and 'contractSize' in market:
-            cs = float(market['contractSize'])
-            if cs > 0:
-                return cs
-        logger.warning(f"⚠️ contractSize ที่ได้ {cs} ผิดปกติ ใช้ค่า fallback = 0.0001")
-        return 0.0001
+        m = markets.get(symbol) or {}
+        cs = float(m.get('contractSize') or 0.0)
+        if cs <= 0 or cs > 0.001:  # BTC perp ต้อง ~0.0001
+            logger.warning(f"⚠️ contractSize ที่ได้ {cs} ผิดปกติ ใช้ค่า fallback = 0.0001")
+            return 0.0001
+        return cs
     except Exception as e:
         logger.error(f"❌ ดึง contractSize ไม่ได้: {e}")
         return 0.0001
@@ -152,10 +151,19 @@ def open_long(contracts: int, pos_mode: str):
 if __name__ == "__main__":
     set_leverage(LEVERAGE)
     pos_mode = get_position_mode()
+
     avail, ord_frozen, imr, mmr = get_margin_channels()
     logger.info(f"🔍 Margin channels | avail={avail:.4f} | ordFrozen={ord_frozen:.4f} | imr={imr:.4f} | mmr={mmr:.4f}")
+
+    # ใช้ avail_net (หัก ordFrozen) เพื่อกันโดน 51008
+    avail_net = max(0.0, avail - ord_frozen)
+    logger.info(f"🧮 ใช้ avail_net สำหรับ sizing = {avail_net:.4f} USDT")
+
     price = get_current_price()
     contract_size = get_contract_size(SYMBOL)
-    logger.info(f"🫙 สรุปสถานะ | avail={avail:.4f} USDT | price={price} | contractSize={contract_size}")
-    contracts = calc_contracts_by_margin(avail, price, contract_size)
+    logger.info(f"🫙 สรุปสถานะ | avail_net={avail_net:.4f} USDT | price={price} | contractSize={contract_size}")
+
+    # คำนวณสัญญาจากมาร์จิ้นจริง + buffer/fee
+    contracts = calc_contracts_by_margin(avail_net, price, contract_size)
+
     open_long(contracts, pos_mode)
