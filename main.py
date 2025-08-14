@@ -43,22 +43,24 @@ def get_available_margin():
 
         data = balance['info']['data'][0]
 
-        # ลองหลาย key เผื่อบางบัญชีมีบาง key ว่าง
-        raw_value = data.get('crossEq') or data.get('availEq') or data.get('cashBal') or data.get('eq') or "0"
+        # ลองดึงจากหลาย key เผื่อบางบัญชี key บางตัวว่าง
+        raw_value = (
+            data.get('availBal') or
+            data.get('cashBal') or
+            data.get('crossEq') or
+            data.get('availEq') or
+            data.get('eq') or
+            "0"
+        )
 
-        if not raw_value.strip():
-            logger.warning("⚠️ Margin field ว่างทั้งหมด อาจไม่มีเงินในบัญชี Futures Cross")
-            return 0.0
-
-        cross_margin = float(raw_value)
-        logger.debug(f"💰 Available Margin: {cross_margin} USDT")
+        cross_margin = float(raw_value) if raw_value.strip() else 0.0
+        logger.debug(f"💰 Available Margin (Cross): {cross_margin} USDT")
         return cross_margin
 
     except Exception as e:
         logger.error(f"❌ ดึงข้อมูล margin ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
         return 0.0
-
 def get_current_price():
     try:
         ticker = exchange.fetch_ticker(SYMBOL)
