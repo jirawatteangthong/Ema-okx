@@ -43,9 +43,9 @@ def get_available_margin():
 
         data = balance['info']['data'][0]
 
-        # ลองดึงจากหลาย key เผื่อบางบัญชี key บางตัวว่าง
+        # ดึง availBal ก่อน เพราะตรงกับที่ในแอปโชว์ Available
         raw_value = (
-            data.get('availBal') or
+            data.get('availBal') or  # ยอดที่ใช้ได้
             data.get('cashBal') or
             data.get('crossEq') or
             data.get('availEq') or
@@ -61,6 +61,7 @@ def get_available_margin():
         logger.error(f"❌ ดึงข้อมูล margin ไม่ได้: {e}")
         logger.debug(traceback.format_exc())
         return 0.0
+        
 def get_current_price():
     try:
         ticker = exchange.fetch_ticker(SYMBOL)
