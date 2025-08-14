@@ -11,7 +11,8 @@ SECRET   = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
 SYMBOL = 'BTC-USDT-SWAP'           # OKX USDT Perp | amount = #contracts
-
+# พิมพ์สถานะทุกๆ รอบเช็ค (True/False)
+LOG_EVERY_TICK = True
 # EMA settings (ปรับได้)
 TFM = os.getenv('TFM', '15m')
 EMA_FAST = int(os.getenv('EMA_FAST', '50'))
@@ -60,6 +61,22 @@ def tg(msg: str):
         requests.post(url, json={'chat_id': TELEGRAM_CHAT_ID, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
     except Exception as e:
         log.warning(f"Telegram send failed: {e}")
+
+def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
+    """
+    พิมพ์สถานะทุกๆ รอบเช็ค:
+    - ถ้าไม่มีโพซิชัน → บอกฝั่งที่ arm + ค่า EMA
+    - ถ้ามีโพซิชัน → บอกฝั่ง/ราคา/EMA เพื่อดูภาพรวม
+    """
+    try:
+        side_txt = 'NONE' if armed_side is None else armed_side.upper()
+        if not in_pos:
+            log.info(f"📊 Waiting... side={side_txt} | fast={f_now:.2f} | slow={s_now:.2f}")
+        else:
+            log.info(f"📊 In-Position {pos_side.upper()} | px≈{price:.2f} | fast={f_now:.2f} | slow={s_now:.2f}")
+    except Exception:
+        # กัน format error เวลาค่าเป็น None
+        pass
 
 def set_isolated_leverage():
     try:
@@ -274,9 +291,12 @@ if __name__ == "__main__":
                     low_water  = price if pos_side == 'short' else None
                     notify_open(pos_side, pos_ct, entry_px)
                     # หลังเปิด ห้ามเปิดเพิ่ม จนกว่าจะปิดและ arm ใหม่
+                # 🔽 เพิ่มตรงนี้
+                if LOG_EVERY_TICK:
+                    log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price)
 
-            time.sleep(POLL_INTERVAL_SECONDS)
+                time.sleep(POLL_INTERVAL_SECONDS)
 
-        except Exception as e:
-            log.error(f"Loop error: {e}")
-            time.sleep(POLL_INTERVAL_SECONDS)
+            except Exception as e:
+                log.error(f"Loop error: {e}")
+                time.sleep(POLL_INTERVAL_SECONDS)
