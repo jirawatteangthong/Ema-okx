@@ -15,9 +15,9 @@ SYMBOL = 'BTC-USDT-SWAP'   # คุณใช้อันนี้อยู่แ
 PORTFOLIO_PERCENTAGE = 0.80   # ใช้ทุนกี่ % ของ available
 LEVERAGE = 15                 # เลเวอเรจ
 SAFETY_PCT = 0.70             # กันชนเพิ่มจากสัดส่วนทุน (conservative)
-FIXED_BUFFER_USDT = 7.0       # กันเงินสดคงที่ (กันค่าธรรมเนียม/เศษต่าง ๆ)
+FIXED_BUFFER_USDT = 8.0       # กันเงินสดคงที่ (กันค่าธรรมเนียม/เศษต่าง ๆ)
 FEE_RATE_TAKER = 0.001        # ประมาณการ taker fee (0.10%) ให้เผื่อเยอะนิดเพื่อลด 51008
-HEADROOM = 0.90               # ยิงเริ่มต้นแค่ 90% ของ theoretical contracts
+HEADROOM = 0.85               # ยิงเริ่มต้นแค่ 90% ของ theoretical contracts
 RETRY_STEP = 0.80             # ลดสัญญาครั้งละ 20% ถ้าเจอ 51008
 MAX_RETRIES = 8               # ลดได้มากสุด 8 ครั้ง
 
