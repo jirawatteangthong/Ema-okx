@@ -99,8 +99,12 @@ def get_price(symbol):
 def get_contract_size(market):
     try:
         size = float(market.get('contractSize') or 0.0)
-        return size if size > 0 else 0.0001
+        if size > 0.001 or size <= 0:  # BTC perp มาตรฐาน 0.0001
+            logger.warning(f"⚠️ contractSize ที่ได้ {size} ผิดปกติ ใช้ค่า fallback = 0.0001")
+            size = 0.0001
+        return size
     except:
+        logger.warning("⚠️ ดึง contractSize ไม่ได้ ใช้ fallback = 0.0001")
         return 0.0001
 
 def set_cross_leverage(market, leverage):
