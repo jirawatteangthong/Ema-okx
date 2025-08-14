@@ -5,26 +5,28 @@ import logging
 import time
 
 # ---------------- CONFIG ----------------
+# ---------------- CONFIG ----------------
 API_KEY = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET = os.getenv('OKX_SECRET', 'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 SYMBOL = 'BTC-USDT-SWAP'
 
-PORTFOLIO_PERCENTAGE = 0.80
-LEVERAGE = 15
-SAFETY_PCT = float(os.getenv('SAFETY_PCT', '0.75'))
-FIXED_BUFFER_USDT = float(os.getenv('FIXED_BUFFER_USDT', '5.0'))
-FEE_RATE_TAKER = float(os.getenv('FEE_RATE_TAKER', '0.0005'))
-RETRY_STEP  = float(os.getenv('RETRY_STEP', '0.8'))
-MAX_RETRIES = int(os.getenv('MAX_RETRIES', '6'))
+# ตั้งค่าการจัดการทุนและความเสี่ยง (ฝังค่าตรง ไม่ต้อง ENV)
+PORTFOLIO_PERCENTAGE = 0.80       # ใช้ทุนกี่ % ของ available
+LEVERAGE = 15                     # Leverage
+SAFETY_PCT = 0.75                  # เผื่อความปลอดภัย
+FIXED_BUFFER_USDT = 5.0           # กันเงินไว้คงที่
+FEE_RATE_TAKER = 0.0005           # ค่าธรรมเนียม Taker (0.05%)
+RETRY_STEP = 0.80                 # ลดสัญญาเหลือ % เดิมถ้า error 51008
+MAX_RETRIES = 6                   # จำนวนครั้งสูงสุดที่ลองลดสัญญา
 
 # ---------------- LOGGER ----------------
+import logging
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger()
-
 # ---------------- INIT EXCHANGE ----------------
 exchange = ccxt.okx({
     'apiKey': API_KEY,
@@ -86,20 +88,29 @@ def get_contract_size(symbol):
 def calc_contracts_by_margin(avail_usdt: float, price: float, contract_size: float) -> int:
     if price <= 0 or contract_size <= 0:
         return 0
-    effective_avail = max(0.0, avail_usdt - FIXED_BUFFER_USDT)
+
+    effective_avail = max(0.0, avail_usdt - FIXED_BUFFER_USDT)  # หัก buffer คงที่
     usable_cash = effective_avail * PORTFOLIO_PERCENTAGE * SAFETY_PCT
+
     notional_per_ct = price * contract_size
-    im_per_ct = notional_per_ct / LEVERAGE
-    fee_per_ct = notional_per_ct * FEE_RATE_TAKER
-    need_per_ct = im_per_ct + fee_per_ct
+    im_per_ct       = notional_per_ct / LEVERAGE
+    fee_per_ct      = notional_per_ct * FEE_RATE_TAKER
+    need_per_ct     = im_per_ct + fee_per_ct
+
     if need_per_ct <= 0:
         return 0
-    max_ct = math.floor(usable_cash / need_per_ct)
+
+    theoretical = usable_cash / need_per_ct
     logger.debug(
         f"🧮 Sizing by margin | avail={avail_usdt:.4f}, eff_avail={effective_avail:.4f}, usable={usable_cash:.4f}, "
         f"notional_ct={notional_per_ct:.4f}, im_ct={im_per_ct:.4f}, fee_ct={fee_per_ct:.6f}, need_ct={need_per_ct:.4f}, "
-        f"max_ct={max_ct}"
+        f"theoretical={theoretical:.4f}"
     )
+
+    max_ct = int(math.floor(theoretical))
+    if max_ct < 0:
+        max_ct = 0
+    logger.debug(f"✅ max_ct(final)={max_ct}")
     return max_ct
 
 def set_leverage(leverage: int):
@@ -155,7 +166,6 @@ if __name__ == "__main__":
     avail, ord_frozen, imr, mmr = get_margin_channels()
     logger.info(f"🔍 Margin channels | avail={avail:.4f} | ordFrozen={ord_frozen:.4f} | imr={imr:.4f} | mmr={mmr:.4f}")
 
-    # ใช้ avail_net (หัก ordFrozen) เพื่อกันโดน 51008
     avail_net = max(0.0, avail - ord_frozen)
     logger.info(f"🧮 ใช้ avail_net สำหรับ sizing = {avail_net:.4f} USDT")
 
@@ -163,7 +173,5 @@ if __name__ == "__main__":
     contract_size = get_contract_size(SYMBOL)
     logger.info(f"🫙 สรุปสถานะ | avail_net={avail_net:.4f} USDT | price={price} | contractSize={contract_size}")
 
-    # คำนวณสัญญาจากมาร์จิ้นจริง + buffer/fee
     contracts = calc_contracts_by_margin(avail_net, price, contract_size)
-
     open_long(contracts, pos_mode)
