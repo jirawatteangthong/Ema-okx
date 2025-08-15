@@ -27,8 +27,8 @@ FIXED_BUFFER_USDT = 2.0            # กันเศษเล็กน้อย
 # TP/SL/Trailing (ปรับได้)
 TP_POINTS = float(os.getenv('TP_POINTS', '111'))     # +300 จุด
 SL_POINTS = float(os.getenv('SL_POINTS', '500'))     # -500 จุด
-TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '99'))
-BE_OFFSET = float(os.getenv('BE_OFFSET', '-10'))      # กันทุน +50
+#TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '99'))
+#BE_OFFSET = float(os.getenv('BE_OFFSET', '-10'))      # กันทุน +50
 
 # Loop interval
 POLL_INTERVAL_SECONDS = float(os.getenv('POLL_INTERVAL_SECONDS', '3'))
