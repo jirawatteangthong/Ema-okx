@@ -13,9 +13,9 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 SYMBOL = 'BTC-USDT-SWAP'           # OKX USDT Perp | amount = #contracts
 
 # EMA settings (ค่าเริ่มตามที่ขอ)
-TFM = os.getenv('TFM', '15m')      # '1m','5m','15m','1h',...
-EMA_FAST = int(os.getenv('EMA_FAST', '50'))
-EMA_SLOW = int(os.getenv('EMA_SLOW', '200'))
+TFM = os.getenv('TFM', '1m')      # '1m','5m','15m','1h',...
+EMA_FAST = int(os.getenv('EMA_FAST', '9'))
+EMA_SLOW = int(os.getenv('EMA_SLOW', '25'))
 
 # Risk/Sizing (ล็อค)
 PORTFOLIO_PERCENTAGE = 0.80        # ใช้ 80% ของพอร์ต
@@ -25,10 +25,10 @@ FEE_RATE_TAKER = 0.001
 FIXED_BUFFER_USDT = 2.0            # กันเศษเล็กน้อย
 
 # TP/SL/Trailing (ปรับได้)
-TP_POINTS = float(os.getenv('TP_POINTS', '300'))     # +300 จุด
+TP_POINTS = float(os.getenv('TP_POINTS', '111'))     # +300 จุด
 SL_POINTS = float(os.getenv('SL_POINTS', '500'))     # -500 จุด
-TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '300'))
-BE_OFFSET = float(os.getenv('BE_OFFSET', '50'))      # กันทุน +50
+TRAIL_POINTS = float(os.getenv('TRAIL_POINTS', '99'))
+BE_OFFSET = float(os.getenv('BE_OFFSET', '-10'))      # กันทุน +50
 
 # Loop interval
 POLL_INTERVAL_SECONDS = float(os.getenv('POLL_INTERVAL_SECONDS', '3'))
