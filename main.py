@@ -16,9 +16,9 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 SYMBOL = 'BTC-USDT-SWAP'  # OKX USDT Perp | amount = #contracts (contractSize ~ 0.01 BTC)
 
 # ===== EMA SETTINGS =====
-TFM = '1h'                                 # << ใช้ 1h ตามที่ขอ
-EMA_FAST = 9                               # << EMA 9
-EMA_SLOW = 50                              # << EMA 50
+TFM = '1h'                 # << ใช้ 1h
+EMA_FAST = 9               # << EMA 9
+EMA_SLOW = 50              # << EMA 50
 
 # ===== RISK / SIZING (LOCKED) =====
 PORTFOLIO_PERCENTAGE = 0.80               # ใช้ 80% ของพอร์ต
@@ -28,21 +28,23 @@ FEE_RATE_TAKER = 0.001
 FIXED_BUFFER_USDT = 2.0                   # กันเศษเล็กน้อยให้ไม่ชน margin
 
 # ===== TP / SL (3 STEP) =====
-# ระยะใช้ "จุด (price points)" จากราคาเข้า เหมือนที่คุณใช้
 TP_POINTS = 700.0                          # TP มาตรฐาน
+
 # Step1: ถึง Trigger → เลื่อน SL เป็น NEW_SL
 SL_STEP1_TRIGGER_LONG  = 200.0
 SL_STEP1_NEW_SL_LONG   = -900.0
 SL_STEP1_TRIGGER_SHORT = 200.0
 SL_STEP1_NEW_SL_SHORT  = 900.0
+
 # Step2:
 SL_STEP2_TRIGGER_LONG  = 350.0
 SL_STEP2_NEW_SL_LONG   = -400.0
 SL_STEP2_TRIGGER_SHORT = 350.0
 SL_STEP2_NEW_SL_SHORT  = 400.0
+
 # Step3: (กำหนดให้ "ถือว่าเป็น TP" ตอนโดนปิด)
 SL_STEP3_TRIGGER_LONG  = 510.0
-SL_STEP3_NEW_SL_LONG   = 460.0  # ถ้าราคาไหลกลับมาโดน SL นี้ -> นับเป็น TP
+SL_STEP3_NEW_SL_LONG   = 460.0   # ถ้าราคาไหลกลับมาโดน SL นี้ -> นับเป็น TP
 SL_STEP3_TRIGGER_SHORT = 510.0
 SL_STEP3_NEW_SL_SHORT  = -460.0
 
@@ -51,8 +53,7 @@ MANUAL_TP_ALERT_POINTS = 1000.0
 MANUAL_TP_ALERT_INTERVAL_SEC = 600
 
 # ===== FEATURE SWITCHES =====
-# ไม่มี cooldown (ตัดทิ้งไปเลย)
-ENABLE_MANUAL_TP_ALERT = True
+ENABLE_MANUAL_TP_ALERT = True   # ไม่มี cooldown อยู่แล้ว
 
 # ===== LOOP INTERVAL =====
 POLL_INTERVAL_SECONDS = float(os.getenv('POLL_INTERVAL_SECONDS', '3'))
@@ -91,6 +92,72 @@ def tg(msg: str):
     except Exception as e:
         log.warning(f"Telegram send failed: {e}")
 
+# ================== TELEGRAM TEMPLATES ==================
+def _fmt_num(x, digits=2):
+    try:
+        return f"{float(x):,.{digits}f}"
+    except Exception:
+        return str(x)
+
+def notify_startup_banner(start_balance: float):
+    # สรุปค่าที่โชว์เหมือนในภาพ
+    base_sl_pts_long  = abs(SL_STEP1_NEW_SL_LONG)
+    base_sl_pts_short = abs(SL_STEP1_NEW_SL_SHORT)
+    base_sl_pts = max(base_sl_pts_long, base_sl_pts_short)
+
+    lines = [
+        "🤖 บอทเริ่มทำงาน 💰",
+        f"💵 ยอดเริ่มต้น: {_fmt_num(start_balance, 2)} USDT",
+        f"📊 TF: {TFM} | Leverage: {LEVERAGE}x",
+        f"📈 EMA Fast: {EMA_FAST}",
+        f"📉 EMA Slow: {EMA_SLOW}",
+        f"❌ SL เริ่มต้น: {int(base_sl_pts)} points",
+        f"🚀 • Step 1: {int(SL_STEP1_TRIGGER_LONG)}pts → SL {int(SL_STEP1_NEW_SL_LONG)}pts",
+        f"🔥 • Step 2: {int(SL_STEP2_TRIGGER_LONG)}pts → SL {int(SL_STEP2_NEW_SL_LONG)}pts",
+        f"🎉 • Step 3 (TP): {int(SL_STEP3_TRIGGER_LONG)}pts → SL {int(SL_STEP3_NEW_SL_LONG)}pts",
+        f"⏰ Manual TP Alert: {int(MANUAL_TP_ALERT_POINTS)} points (จะมีการแจ้งเตือนปิดกำไร💸)",
+        "🔎 กำลังรอเปิดออเดอร์..."
+    ]
+    tg("\n".join(lines))
+
+def notify_open_detailed(pos_side, contracts, entry_px):
+    msg = (
+        f"🎯 เปิดโพซิชัน {pos_side.upper()} สำเร็จ!\n"
+        f"📊 ขนาด: {contracts:.8f} Contracts\n"
+        f"💵 Entry: {_fmt_num(entry_px, 6)}\n"
+        f"📈 P&L: 0.00 USDT"
+    )
+    tg(msg)
+
+def notify_set_sl(direction: str, sl_price: float, size_contracts: float):
+    # ส่งทุกครั้งที่ “เลื่อน SL” หรือ “ตั้ง SL ครั้งแรก”
+    msg = (
+        "✅ ตั้ง SL สำเร็จ!\n"
+        f"🛑 SL: {_fmt_num(sl_price, 2)}\n"
+        f"📊 Direction: {direction.upper()}\n"
+        f"🧱 Size: {size_contracts:.8f}"
+    )
+    tg(msg)
+
+def notify_manual_tp_alert(side: str, entry_px: float, cur_px: float, gain_points: float):
+    msg = (
+        "🔔 Manual TP Alert!\n"
+        f"💵 กำไรปัจจุบัน: +{int(gain_points)} points\n"
+        f"📈 Entry: {_fmt_num(entry_px, 2)} → Current: {_fmt_num(cur_px, 2)}\n"
+        "💡 แนะนำปิดกำไรด้วยมือ ด่วนที่สุด 🔥"
+    )
+    tg(msg)
+
+def notify_close(side, contracts, entry_px, exit_px, contract_size, reason):
+    price_diff = (exit_px - entry_px) if side == 'long' else (entry_px - exit_px)
+    pnl_per_contract = price_diff * contract_size
+    pnl_total = pnl_per_contract * contracts
+    flag = "🎉 TP" if reason == 'TP' else ("🔥 SL" if reason == 'SL' else "✋ MANUAL")
+    txt = (f"✅ CLOSE {side.upper()} {contracts} | {flag}\n"
+           f"entry≈{entry_px:.2f} | exit≈{exit_px:.2f}\n"
+           f"PnL/contract≈{pnl_per_contract:.2f} USDT | Total≈{pnl_total:.2f} USDT")
+    tg(txt)
+
 # ================== MONTHLY STATS ==================
 def _ensure_stats_file():
     if not STATS_FILE.exists():
@@ -99,7 +166,7 @@ def _ensure_stats_file():
             writer.writerow(['timestamp', 'month', 'symbol', 'side', 'reason', 'contracts', 'entry', 'exit', 'pnl_usdt'])
 
 def add_trade_result(side: str, reason: str, contracts: int, entry_px: float, exit_px: float, contract_size: float):
-    """reason: 'TP' | 'SL' | 'MANUAL' ; นับ Step3 เป็น 'TP' ก่อนส่งเข้าฟังก์ชันนี้แล้ว"""
+    """reason: 'TP' | 'SL' | 'MANUAL' ; Step3 จะถูกนับเป็น 'TP' โดยลอจิกข้างล่างแล้ว"""
     price_diff = (exit_px - entry_px) if side == 'long' else (entry_px - exit_px)
     pnl_per_contract = price_diff * contract_size
     pnl_total = pnl_per_contract * contracts
@@ -111,7 +178,6 @@ def add_trade_result(side: str, reason: str, contracts: int, entry_px: float, ex
         writer.writerow([datetime.utcnow().isoformat(), month_key, SYMBOL, side, reason, contracts, f'{entry_px:.2f}', f'{exit_px:.2f}', f'{pnl_total:.2f}'])
 
 def monthly_report(month: str = None) -> str:
-    """month='YYYY-MM' (ถ้าไม่ใส่ ใช้เดือนปัจจุบัน UTC)"""
     _ensure_stats_file()
     if month is None:
         month = datetime.utcnow().strftime('%Y-%m')
@@ -227,20 +293,6 @@ def fetch_ema_set():
         log.error(f"Fetch EMA failed: {e}")
         return (None, None, None, None)
 
-def get_position():
-    """return ('flat'|'long'|'short', contracts, entry_price|None)"""
-    try:
-        pos = exchange.fetch_positions([SYMBOL])
-        for p in pos:
-            amt = float(p.get('contracts') or 0)
-            if amt != 0:
-                side = 'long' if amt > 0 else 'short'
-                entry = float(p.get('entryPrice') or 0) or None
-                return side, abs(int(amt)), entry
-        return 'flat', 0, None
-    except Exception:
-        return 'flat', 0, None
-
 def open_market(side: str, contracts: int):
     params = {'tdMode': MARGIN_MODE}
     order = exchange.create_order(SYMBOL, 'market', side, contracts, None, params)
@@ -253,25 +305,7 @@ def close_market(current_side: str, contracts: int):
     params = {'tdMode': MARGIN_MODE, 'reduceOnly': True}
     return exchange.create_order(SYMBOL, 'market', side, contracts, None, params)
 
-# ================== NOTIFY HELPERS ==================
-def notify_open(side, contracts, price):
-    txt = f"🚀 OPEN {side.upper()} {contracts}\npx≈{price} | TF={TFM} | EMA {EMA_FAST}/{EMA_SLOW}"
-    log.info(txt); tg(txt)
-
-def notify_sl_move(side, old_sl, new_sl, step_no):
-    txt = f"🛡️ {side.upper()} SL STEP{step_no} {old_sl:.1f} → {new_sl:.1f}"
-    log.info(txt); tg(txt)
-
-def notify_close(side, contracts, entry_px, exit_px, contract_size, reason):
-    price_diff = (exit_px - entry_px) if side == 'long' else (entry_px - exit_px)
-    pnl_per_contract = price_diff * contract_size
-    pnl_total = pnl_per_contract * contracts
-    flag = "🎉 TP" if reason == 'TP' else ("🔥 SL" if reason == 'SL' else "✋ MANUAL")
-    txt = (f"✅ CLOSE {side.upper()} {contracts} | {flag}\n"
-           f"entry≈{entry_px:.2f} | exit≈{exit_px:.2f}\n"
-           f"PnL/contract≈{pnl_per_contract:.2f} USDT | Total≈{pnl_total:.2f} USDT")
-    log.info(txt); tg(txt)
-
+# ================== LOG HELPERS ==================
 def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
     try:
         side_txt = 'NONE' if armed_side is None else armed_side.upper()
@@ -282,20 +316,15 @@ def log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price):
     except Exception:
         pass
 
-# ================== MAIN (Armed Cross + SL 3 ขั้น + TP + แจ้งเตือน Manual TP) ==================
+# ================== MAIN (Armed Cross + SL 3 ขั้น + TP + Manual TP Alerts + Monthly Stats) ==================
 if __name__ == "__main__":
-    tg("🤖 บอทเริ่มทำงาน 💰")
-    log.info("🤖 บอทเริ่มทำงาน 💰")
+    # Startup
     set_isolated_leverage()
     cancel_all_open_orders()
     contract_size = get_contract_size()
 
     start_balance = get_avail_net_usdt()
-    f_prev, s_prev, f_now, s_now = fetch_ema_set()
-    log.info(f"💰 ยอดเริ่มต้น ≈ {start_balance:.2f} USDT")
-    log.info(f"📉Ema{EMA_FAST}/{EMA_SLOW} | fast={f_now if f_now else 0:.2f} | slow={s_now if s_now else 0:.2f}")
-    log.info(f"🎉TP +{TP_POINTS} | 🔰SL Step1/2/3 | เตือนปิดมือ +{MANUAL_TP_ALERT_POINTS}")
-    log.info("🔍 กำลังรอเปิดออเดอร์...")
+    notify_startup_banner(start_balance)
 
     # ===== INTERNAL STATE =====
     in_pos = False
@@ -330,17 +359,15 @@ if __name__ == "__main__":
             if in_pos:
                 if pos_side == 'long':
                     tp = entry_px + TP_POINTS
-                    base_sl = entry_px - abs(SL_STEP1_NEW_SL_LONG)  # base เริ่มเท่า SL step1 ระยะลบ
+                    base_sl = entry_px - abs(SL_STEP1_NEW_SL_LONG)  # base เริ่มเท่าระยะ step1 (ลบ)
 
                     # อัปเดต high_water
                     high_water = price if high_water is None else max(high_water, price)
-
                     pnl_pts = price - entry_px
 
                     # คำนวณ SL ตามสเต็ป
                     desired_sl = base_sl
                     step_target = 0
-
                     if pnl_pts >= SL_STEP1_TRIGGER_LONG:
                         desired_sl = entry_px + SL_STEP1_NEW_SL_LONG
                         step_target = 1
@@ -351,22 +378,25 @@ if __name__ == "__main__":
                         desired_sl = entry_px + SL_STEP3_NEW_SL_LONG
                         step_target = 3
 
-                    # แจ้งเลื่อน SL เมื่อขยับขึ้นสเต็ป
+                    # ตั้งครั้งแรก + แจ้ง
                     if curr_sl is None:
                         curr_sl = base_sl
+                        notify_set_sl('long', curr_sl, pos_ct)
+
+                    # เลื่อนแล้วแจ้ง
                     if desired_sl > curr_sl + 1e-9:
-                        notify_sl_move('long', curr_sl, desired_sl, step_target if step_target else 0)
                         curr_sl = desired_sl
                         sl_step = step_target
+                        notify_set_sl('long', curr_sl, pos_ct)
 
-                    # เตือนปิดมือเมื่อกำไรทะลุเกณฑ์
+                    # Manual TP alert
                     if ENABLE_MANUAL_TP_ALERT and pnl_pts >= MANUAL_TP_ALERT_POINTS:
                         now = time.time()
                         if now - last_manual_alert_ts >= MANUAL_TP_ALERT_INTERVAL_SEC:
                             last_manual_alert_ts = now
-                            tg(f"🔔 กำไร +{pnl_pts:.0f} points (LONG)\nEntry {entry_px:.2f} → Now {price:.2f}\nพิจารณาปิดมือได้เลย ✋")
+                            notify_manual_tp_alert('long', entry_px, price, pnl_pts)
 
-                    # เงื่อนไขปิด
+                    # ปิดด้วย TP / SL
                     if price >= tp:
                         close_market('long', pos_ct)
                         notify_close('long', pos_ct, entry_px, price, contract_size, reason='TP')
@@ -377,7 +407,6 @@ if __name__ == "__main__":
 
                     elif price <= curr_sl:
                         close_market('long', pos_ct)
-                        # ถ้าอยู่ Step3 ให้ถือว่าเป็น TP
                         reason = 'TP' if sl_step == 3 else 'SL'
                         notify_close('long', pos_ct, entry_px, price, contract_size, reason=reason)
                         add_trade_result('long', reason, pos_ct, entry_px, price, contract_size)
@@ -394,7 +423,6 @@ if __name__ == "__main__":
 
                     desired_sl = base_sl
                     step_target = 0
-
                     if pnl_pts >= SL_STEP1_TRIGGER_SHORT:
                         desired_sl = entry_px + SL_STEP1_NEW_SL_SHORT
                         step_target = 1
@@ -407,16 +435,18 @@ if __name__ == "__main__":
 
                     if curr_sl is None:
                         curr_sl = base_sl
+                        notify_set_sl('short', curr_sl, pos_ct)
+
                     if desired_sl < curr_sl - 1e-9:
-                        notify_sl_move('short', curr_sl, desired_sl, step_target if step_target else 0)
                         curr_sl = desired_sl
                         sl_step = step_target
+                        notify_set_sl('short', curr_sl, pos_ct)
 
                     if ENABLE_MANUAL_TP_ALERT and pnl_pts >= MANUAL_TP_ALERT_POINTS:
                         now = time.time()
                         if now - last_manual_alert_ts >= MANUAL_TP_ALERT_INTERVAL_SEC:
                             last_manual_alert_ts = now
-                            tg(f"🔔 กำไร +{pnl_pts:.0f} points (SHORT)\nEntry {entry_px:.2f} → Now {price:.2f}\nพิจารณาปิดมือได้เลย ✋")
+                            notify_manual_tp_alert('short', entry_px, price, pnl_pts)
 
                     if price <= tp:
                         close_market('short', pos_ct)
@@ -456,9 +486,9 @@ if __name__ == "__main__":
                         low_water  = price if pos_side == 'short' else None
                         curr_sl = None
                         sl_step = 0
-                        notify_open(pos_side, pos_ct, entry_px)
+                        notify_open_detailed(pos_side, pos_ct, entry_px)
 
-            # ===== TICK LOG =====
+            # ===== LOG =====
             if LOG_EVERY_TICK:
                 log_tick_status(armed_side, f_now, s_now, in_pos, pos_side, price)
 
