@@ -13,9 +13,9 @@ PASSWORD = os.getenv('OKX_PASSWORD', 'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 SYMBOL = 'BTC-USDT-SWAP'  # OKX USDT Perp | amount = #contracts (contractSize ~ 0.01 BTC)
 
 # ===== EMA SETTINGS =====
-TFM = os.getenv('TFM', '15m')             # '1m','5m','15m','1h',...
-EMA_FAST = int(os.getenv('EMA_FAST', '50'))
-EMA_SLOW = int(os.getenv('EMA_SLOW', '200'))
+TFM = os.getenv('TFM', '5m')             # '1m','5m','15m','1h',...
+EMA_FAST = int(os.getenv('EMA_FAST', '9'))
+EMA_SLOW = int(os.getenv('EMA_SLOW', '25'))
 
 # ===== RISK / SIZING (LOCKED) =====
 PORTFOLIO_PERCENTAGE = 0.80               # ใช้ 80% ของพอร์ต
