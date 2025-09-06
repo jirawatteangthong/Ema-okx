@@ -8,7 +8,7 @@ API_KEY  = os.getenv('OKX_API_KEY', 'YOUR_OKX_API_KEY_HERE_FOR_LOCAL_TESTING')
 SECRET   = os.getenv('OKX_SECRET',    'YOUR_OKX_SECRET_HERE_FOR_LOCAL_TESTING')
 PASSWORD = os.getenv('OKX_PASSWORD',  'YOUR_OKX_PASSWORD_HERE_FOR_LOCAL_TESTING')
 
-SYMBOL = 'BTC-USDT-SWAP'
+SYMBOL_ID_ENV = 'BTC-USDT-SWAP'
 # Timeframes
 TIMEFRAME_H1      = '1h'
 TIMEFRAME_M5      = '5m'
@@ -20,7 +20,7 @@ TARGET_POSITION_SIZE_FACTOR = 0.8     # ใช้ % ของ Free USDT
 MARGIN_BUFFER_USDT = 5                 # กันเงินไม่ใช้ทั้งหมด
 
 # เพดาน notional ต่อแผน (ปรับได้)
-MAX_NOTIONAL = float(os.getenv('MAX_NOTIONAL', '100000')) #เพดานทุนสูงสุด1แสนusdt
+MAX_NOTIONAL = 100000.0  #เพดานสูงสุด usdt
 
 # ---- EMA/MACD Parameters ----
 EMA_FAST_H1   = 10
@@ -31,10 +31,8 @@ MACD_SLOW     = 26
 MACD_SIGNAL   = 9
 
 # ---- EMA accuracy / snapshot logging ----
-LOOKBACK_H1_BARS = 1000   # warm-up EMA H1 (แนะนำ 600-1200)
-LOOKBACK_M5_BARS = 1500   # warm-up EMA200/MACD (แนะนำ 1200-2000)
-
-WAIT_H1_CLOSE = True
+LOOKBACK_H1_BARS = 1000
+LOOKBACK_M5_BARS = 1500
 DIAG_LOG_INTERVAL_SEC = 180
 
 # ---- SL เริ่มต้นจาก Swing M5 (soft SL ในบอท) ----
@@ -100,6 +98,8 @@ def dbg(tag: str, **kw):
 # ================== GLOBAL STATE ==================
 exchange = None
 market_info = None
+SYMBOL_ID = None       # OKX id, e.g. 'BTC-USDT-SWAP'
+SYMBOL_U  = None       # unified, e.g. 'BTC/USDT:USDT'
 
 last_snapshot_log_ts = 0.0
 last_diag_log_ts = 0.0
@@ -123,7 +123,7 @@ last_manual_tp_alert_ts = 0.0
 last_monthly_report_date = None
 initial_balance = 0.0
 
-# ตัวนับ H1 สวนทาง (เมื่อ H1_OPP_CONFIRM_BARS > 1)
+# ตัวนับ H1 สวนทาง
 h1_opp_count = 0
 h1_opp_last_ts = None
 h1_opp_dir = None
@@ -169,7 +169,7 @@ def clear_notif(prefix: str):
 
 # ================== Exchange Setup (OKX) ==================
 def setup_exchange():
-    global exchange, market_info
+    global exchange, market_info, SYMBOL_ID, SYMBOL_U
     if (not API_KEY or not SECRET or not PASSWORD or
         'YOUR_' in API_KEY or 'YOUR_' in SECRET or 'YOUR_' in PASSWORD):
         send_telegram("⛔ Critical: API key/secret/password not set."); sys.exit(1)
@@ -182,10 +182,15 @@ def setup_exchange():
         'options': {'defaultType': 'swap'}
     })
     exchange.load_markets()
-    market_info = exchange.market(SYMBOL)
+
+    # รับเป็น id จาก ENV แล้ว map เป็น unified เพื่อใช้งานทุกจุด
+    m = exchange.market(SYMBOL_ID_ENV)
+    market_info = m
+    SYMBOL_ID = m['id']            # 'BTC-USDT-SWAP'
+    SYMBOL_U  = m['symbol']        # 'BTC/USDT:USDT'
+
     try:
-        # ตั้ง Leverage + Margin Mode (isolated/cross)
-        exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': OKX_MARGIN_MODE})
+        exchange.set_leverage(LEVERAGE, SYMBOL_U, params={'mgnMode': OKX_MARGIN_MODE})
     except Exception as e:
         logger.error(f"set_leverage failed: {e}")
         send_telegram(f"⛔ set_leverage failed: {e}")
@@ -193,7 +198,7 @@ def setup_exchange():
 def decimal_price(v: float) -> float:
     if not market_info: return round(v, 2)
     try:
-        return float(exchange.price_to_precision(SYMBOL, v))
+        return float(exchange.price_to_precision(SYMBOL_U, v))
     except Exception:
         return round(v, 2)
 
@@ -214,7 +219,6 @@ def get_free_usdt() -> float | None:
             bal = exchange.fetch_balance()
         except Exception:
             return None
-    # โครงสร้าง OKX
     try:
         data = (bal.get('info', {}).get('data') or [])
         if data:
@@ -232,7 +236,6 @@ def get_free_usdt() -> float | None:
     except Exception:
         pass
 
-    # fallback แบบ unified
     v = (bal.get('USDT',{}) or {}).get('free', None)
     if v is not None:
         try: return float(v)
@@ -250,13 +253,13 @@ def get_portfolio_balance() -> float:
 
 # ================== Sizing Helpers ==================
 def contracts_from_notional(price: float, notional: float) -> float:
-    """แปลง notional(USDT) -> จำนวนสัญญา ตาม contractSize (OKX: BTC-USDT-SWAP ~ 0.01 BTC/ct)"""
+    """แปลง notional(USDT) -> จำนวนสัญญา ตาม contractSize"""
     cs = _get_contract_size()
     if price <= 0 or cs <= 0 or notional <= 0:
         return 0.0
     cts = notional / (price * cs)
     try:
-        return float(exchange.amount_to_precision(SYMBOL, cts))
+        return float(exchange.amount_to_precision(SYMBOL_U, cts))
     except Exception:
         return max(0.0, cts)
 
@@ -323,11 +326,11 @@ def find_recent_swing_low_high_m5(ohlcv_m5, lookback=SWING_LOOKBACK_M5, k=2):
 
 def log_indicator_snapshot():
     try:
-        price_now = exchange.fetch_ticker(SYMBOL)['last']
+        price_now = exchange.fetch_ticker(SYMBOL_U)['last']
 
         # H1 (แท่งปิด)
         limit_h1 = max(LOOKBACK_H1_BARS, EMA_SLOW_H1 + 50)
-        o_h1 = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_H1, limit=limit_h1)
+        o_h1 = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_H1, limit=limit_h1)
         ema_fast_h1 = ema_slow_h1 = h1_close = h1_bar_ts = None
         h1_dir = None
         if o_h1 and len(o_h1) >= 3:
@@ -341,7 +344,7 @@ def log_indicator_snapshot():
 
         # M5 (แท่งปิด)
         limit_m5 = max(LOOKBACK_M5_BARS, EMA200_M5 + 50)
-        o_m5 = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_M5, limit=limit_m5)
+        o_m5 = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_M5, limit=limit_m5)
         ema200_m5 = m5_close = m5_bar_ts = None
         macd_vals = None
         if o_m5 and len(o_m5) >= EMA200_M5 + 5:
@@ -375,18 +378,13 @@ def log_indicator_snapshot():
 
 def log_ema_warmup_diagnostics():
     try:
-        o = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_H1, limit=max(LOOKBACK_H1_BARS, 1200))
+        o = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_H1, limit=max(LOOKBACK_H1_BARS, 1200))
         if not o or len(o) < EMA_SLOW_H1 + 3:
             return
         closes = [c[4] for c in o[:-1]]
-        packs = {
-            "60bars":   closes[-60:],
-            "300bars":  closes[-300:],
-            "1000bars": closes[-1000:]
-        }
-        out = {}
-        for k, arr in packs.items():
-            out[k] = {"ema10": last_ema(arr, 10), "ema50": last_ema(arr, 50), "close": arr[-1] if arr else None}
+        packs = {"60bars":closes[-60:], "300bars":closes[-300:], "1000bars":closes[-1000:]}
+        out = {k: {"ema10": last_ema(arr, 10), "ema50": last_ema(arr, 50), "close": arr[-1] if arr else None}
+               for k, arr in packs.items()}
         logger.info("[EMA_WARMUP_DIAG_H1] " + json.dumps(out, ensure_ascii=False, default=str))
     except Exception as e:
         logger.error(f"ema warmup diag error: {e}")
@@ -394,12 +392,16 @@ def log_ema_warmup_diagnostics():
 # ================== Position/Orders (OKX style) ==================
 def fetch_position():
     try:
-        ps = exchange.fetch_positions([SYMBOL])
+        ps = exchange.fetch_positions([SYMBOL_U])
         for p in ps:
-            if p.get('symbol')==SYMBOL and float(p.get('contracts',0) or 0)!=0:
-                return {'side':p.get('side'),
-                        'contracts':abs(float(p.get('contracts',0))),
-                        'entry':float(p.get('entryPrice',0) or 0)}
+            sym_u  = p.get('symbol')
+            instId = ((p.get('info') or {}).get('instId'))
+            if (sym_u == SYMBOL_U) or (instId == SYMBOL_ID):
+                contracts = abs(float(p.get('contracts',0) or 0))
+                if contracts != 0:
+                    return {'side':p.get('side'),
+                            'contracts':contracts,
+                            'entry':float(p.get('entryPrice',0) or 0)}
         return None
     except Exception as e:
         logger.error(f"fetch_position error: {e}"); return None
@@ -407,22 +409,31 @@ def fetch_position():
 def cancel_all_open_orders(max_retry=3):
     for _ in range(max_retry):
         try:
-            orders = exchange.fetch_open_orders(SYMBOL)
+            orders = exchange.fetch_open_orders(SYMBOL_U)
             if not orders: return
             for o in orders:
-                try: exchange.cancel_order(o['id'], SYMBOL); time.sleep(0.05)
+                try: exchange.cancel_order(o['id'], SYMBOL_U); time.sleep(0.05)
                 except Exception as e: logger.warning(f"cancel warn: {e}")
         except Exception as e:
             logger.error(f"cancel_all_open_orders error: {e}"); time.sleep(0.2)
 
+def _create_market_order_with_fallback(side_ccxt: str, qty: float, extra_params: dict):
+    """ลองส่งแบบ hedged (posSide) ก่อน ถ้าไม่ผ่าน ค่อยส่งแบบ one-way"""
+    params_hedged = dict(extra_params)
+    # map posSide ตาม side ของ position
+    if side_ccxt.lower() == 'buy':
+        params_hedged['posSide'] = 'long'
+    else:
+        params_hedged['posSide'] = 'short'
+    try:
+        return exchange.create_market_order(SYMBOL_U, side_ccxt, qty, None, params_hedged)
+    except Exception:
+        return exchange.create_market_order(SYMBOL_U, side_ccxt, qty, None, extra_params)
+
 def set_sl_close_position(side: str, stop_price: float):
-    """
-    OKX: ใช้ soft SL ภายในบอท (ไม่ตั้ง STOP ในตลาด)
-    แค่บันทึก/แจ้งเตือน แล้ว monitor จะสั่ง reduceOnly market เมื่อราคาโดน
-    """
+    """Soft SL: เก็บค่าไว้ แจ้งเตือน; monitor จะ reduceOnly market เองเมื่อถึงราคา"""
     try:
         sp = decimal_price(stop_price)
-        # แจ้งเตือนเหมือนของเดิม
         send_telegram("✅ ตั้ง SL สำเร็จ!\n"
                       f"📊 Direction: <b>{side.upper()}</b>\n"
                       f"🛡 SL: <code>{fmt_usd(sp)}</code>")
@@ -448,7 +459,7 @@ def open_market(side: str, price_now: float):
 
     side_ccxt = 'buy' if side=='long' else 'sell'
     try:
-        exchange.create_market_order(SYMBOL, side_ccxt, qty, None, {'tdMode': OKX_MARGIN_MODE})
+        _create_market_order_with_fallback(side_ccxt, qty, {'tdMode': OKX_MARGIN_MODE})
         time.sleep(0.6)
         pos = fetch_position()
         if not pos or pos.get('side') != side:
@@ -476,7 +487,7 @@ def open_market(side: str, price_now: float):
         )
 
         # SL เริ่มต้น (soft SL)
-        ohlcv_m5 = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_M5, limit=max(SWING_LOOKBACK_M5, 60))
+        ohlcv_m5 = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_M5, limit=max(SWING_LOOKBACK_M5, 60))
         swing_low, swing_high = find_recent_swing_low_high_m5(ohlcv_m5)
         raw_sl = (swing_low - SL_EXTRA_POINTS) if side=='long' else (swing_high + SL_EXTRA_POINTS)
         sl0 = max(raw_sl, entry_ref - MAX_INITIAL_SL_POINTS) if side=='long' \
@@ -512,14 +523,13 @@ def safe_close_position(reason: str = "") -> bool:
             position = None
             return True
 
-        # 1) ยกเลิกคำสั่งค้าง
         cancel_all_open_orders()
-        # 2) reduceOnly market
         close_side = 'sell' if side == 'long' else 'buy'
-        params = {'reduceOnly': True, 'tdMode': OKX_MARGIN_MODE}
-        exchange.create_market_order(SYMBOL, close_side, qty, None, params)
+        try:
+            _create_market_order_with_fallback(close_side, qty, {'reduceOnly': True, 'tdMode': OKX_MARGIN_MODE})
+        except Exception:
+            _create_market_order_with_fallback(close_side, qty, {'reduceOnly': True})
 
-        # 3) ยืนยัน
         time.sleep(1.0)
         for _ in range(10):
             time.sleep(0.5)
@@ -540,7 +550,6 @@ def safe_close_position(reason: str = "") -> bool:
         return False
 
 def tighten_sl_for_new_signal(side: str, price_now: float):
-    """เมื่อมีสัญญาณ H1 ใหม่สวนฝั่งระหว่างถือโพซิชัน"""
     if NEW_SIGNAL_ACTION == 'close_now':
         try:
             new_dir, new_ts, extra_h1 = get_h1_dir_closed()
@@ -578,7 +587,7 @@ def tighten_sl_for_new_signal(side: str, price_now: float):
 # ================== H1 (แท่งปิด) & Baseline ==================
 def get_h1_dir_closed() -> tuple[str | None, int | None, dict]:
     limit = max(LOOKBACK_H1_BARS, EMA_SLOW_H1 + 50)
-    o = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_H1, limit=limit)
+    o = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_H1, limit=limit)
     if not o or len(o) < EMA_SLOW_H1 + 3:
         return None, None, {}
     ts = o[-2][0]
@@ -632,7 +641,7 @@ def reset_h1_baseline():
 # ================== Entry Logic (H1→M5) ==================
 def check_m5_env():
     limit = max(LOOKBACK_M5_BARS, EMA200_M5 + 50)
-    o = exchange.fetch_ohlcv(SYMBOL, timeframe=TIMEFRAME_M5, limit=limit)
+    o = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_M5, limit=limit)
     if not o or len(o) < EMA200_M5 + 5:
         return None
     ts = o[-2][0]
@@ -753,7 +762,6 @@ def maybe_fill_remaining(price_now: float):
     band_low  = float(fill_plan['band_low'])
     band_high = float(fill_plan['band_high'])
 
-    # band stop: long ต่ำกว่า entry-300 / short สูงกว่า entry+300
     if side == 'long':
         band_stop = entry_ref - (ENTRY_BAND_PTS + ENTRY_BAND_STOP_EXTRA)
         if price_now < band_stop:
@@ -771,7 +779,6 @@ def maybe_fill_remaining(price_now: float):
         if (price_now < band_low) or (price_now > band_high):
             return
 
-    # กลับเข้ากรอบแล้ว → เติมครั้งเดียวให้ครบ cap (จำกัดด้วย margin ปัจจุบัน)
     target = float(fill_plan['target_notional'])
     current_est = approx_position_notional(price_now)
     remain = max(0.0, target - current_est)
@@ -791,7 +798,7 @@ def maybe_fill_remaining(price_now: float):
 
     side_ccxt = 'buy' if side == 'long' else 'sell'
     try:
-        exchange.create_market_order(SYMBOL, side_ccxt, qty, None, {'tdMode': OKX_MARGIN_MODE})
+        _create_market_order_with_fallback(side_ccxt, qty, {'tdMode': OKX_MARGIN_MODE})
         time.sleep(0.5)
         pos = fetch_position()
         if not pos:
@@ -801,7 +808,7 @@ def maybe_fill_remaining(price_now: float):
             f"🧰 เติมเพิ่ม≈ <code>{fmt_usd(take_notional)} USDT</code>\n"
             f"📌 ราคาเติม≈ <code>{fmt_usd(price_now)}</code>"
         )
-        fill_plan['add_disabled'] = True  # เติมครั้งเดียวพอ
+        fill_plan['add_disabled'] = True
     except Exception as e:
         logger.error(f"fill_remaining error: {e}")
         send_telegram(f"❌ เติมไม่สำเร็จ: {e}")
@@ -842,12 +849,10 @@ def monitor_position_and_trailing(price_now: float):
             reset_h1_baseline()
         return
 
-    # sync entry/size
     if position:
         position['contracts'] = float(pos_real['contracts'])
         position['entry']     = float(pos_real['entry'])
 
-    # ตรวจ H1 สวนทางระหว่างถือโพซิชัน
     if position:
         if H1_OPP_CONFIRM_BARS <= 1:
             h1_dir_now, _, extra_h1 = get_h1_dir_closed()
@@ -874,20 +879,17 @@ def monitor_position_and_trailing(price_now: float):
     side, entry = position['side'], position['entry']
     pnl_pts = (price_now - entry) if side=='long' else (entry - price_now)
 
-    # Step 1
     if position['step'] < 1 and pnl_pts >= STEP1_TRIGGER:
         new_sl = (entry + STEP1_SL_OFFSET) if side=='long' else (entry - STEP1_SL_OFFSET)
         if set_sl_close_position(side, new_sl):
             position['sl']=new_sl; position['step']=1
             send_once(f"step:1:{position['opened_at']}", "🚦 Step1 → เลื่อน SL มา <code>{}</code>".format(fmt_usd(new_sl)))
-    # Step 2
     elif position['step'] < 2 and pnl_pts >= STEP2_TRIGGER:
         new_sl = (entry + STEP2_SL_OFFSET) if side=='long' else (entry - STEP2_SL_OFFSET)
         if set_sl_close_position(side, new_sl):
             position['sl']=new_sl; position['step']=2
             send_once(f"step:2:{position['opened_at']}", "🚦 Step2 → SL = <code>{}</code>  🤑<b>TP</b>".format(fmt_usd(new_sl)))
             add_tp_reached(2, entry, new_sl)
-    # Step 3
     elif position['step'] < 3 and pnl_pts >= STEP3_TRIGGER:
         new_sl = (entry + STEP3_SL_OFFSET) if side=='long' else (entry - STEP3_SL_OFFSET)
         if set_sl_close_position(side, new_sl):
@@ -895,7 +897,6 @@ def monitor_position_and_trailing(price_now: float):
             send_once(f"step:3:{position['opened_at']}", "💶 Step3 → SL = <code>{}</code>  💵<b>TP</b>".format(fmt_usd(new_sl)))
             add_tp_reached(3, entry, new_sl)
 
-    # Auto-close
     if pnl_pts >= AUTO_CLOSE_TRIGGER:
         tag = f"autoclose:{position['opened_at']}"
         if not _notif_sent.get(tag):
@@ -905,14 +906,12 @@ def monitor_position_and_trailing(price_now: float):
                 send_telegram("⚠️ Auto-close มีปัญหา โปรดตรวจสอบ")
         return
 
-    # Manual close alert
     if pnl_pts >= MANUAL_CLOSE_ALERT_TRIGGER:
         now = time.time()
         if now - last_manual_tp_alert_ts >= 30:
             globals()['last_manual_tp_alert_ts'] = now
             send_telegram("🚨 กำไรเกินเป้าแล้ว <b>{:.0f} pts</b>\nพิจารณา <b>ปิดโพซิชัน</b> ".format(MANUAL_CLOSE_ALERT_TRIGGER))
 
-    # เติมครั้งเดียวเมื่อกลับเข้ากรอบ
     if position:
         maybe_fill_remaining(price_now)
 
@@ -1006,7 +1005,7 @@ def monthly_report():
             f"<b>Σ กำไรสุทธิเดือนนี้:</b> <code>{pnl_net:+,.2f} USDT</code>\n"
             f"<b>💼 คงเหลือปัจจุบัน:</b> <code>{balance:,.2f} USDT</code>\n"
             f"<b>↔︎ จากยอดเริ่มต้น:</b> <code>{pnl_from_start:+,.2f} USDT</code>\n"
-            f"<b>⏱ บอทokxยังทำงานปกติ</b> ✅\n"
+            f"<b>⏱ บอทยังทำงานปกติ</b> ✅\n"
             f"<b>เวลา:</b> <code>{now.strftime('%H:%M')}</code>"
         )
         send_telegram(message)
@@ -1059,7 +1058,7 @@ def main():
 
     while True:
         try:
-            price_now = exchange.fetch_ticker(SYMBOL)['last']
+            price_now = exchange.fetch_ticker(SYMBOL_U)['last']
             if position:
                 monitor_position_and_trailing(price_now)
             else:
