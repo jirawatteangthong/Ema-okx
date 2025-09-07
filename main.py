@@ -253,16 +253,19 @@ def get_portfolio_balance() -> float:
 
 # ================== Sizing Helpers ==================
 def contracts_from_notional(price: float, notional: float) -> float:
-    """แปลง notional(USDT) -> จำนวนสัญญา ตาม contractSize"""
     cs = _get_contract_size()
     if price <= 0 or cs <= 0 or notional <= 0:
         return 0.0
-    cts = notional / (price * cs)
+    contracts = notional / (price * cs)
     try:
-        return float(exchange.amount_to_precision(SYMBOL_U, cts))
+        contracts = float(exchange.amount_to_precision(SYMBOL_U, contracts))
     except Exception:
-        return max(0.0, cts)
-
+        contracts = float(f"{contracts:.4f}")
+    # ต้องไม่น้อยกว่า min lot 0.01 (OKX BTC-USDT-SWAP)
+    if contracts < 0.01:
+        return 0.0
+    return contracts
+    
 def approx_position_notional(price: float) -> float:
     """ประมาณ notional ปัจจุบัน: contracts * price * contractSize"""
     try:
@@ -443,19 +446,20 @@ def set_sl_close_position(side: str, stop_price: float):
         send_telegram(f"❌ SL Error: {e}"); return False
 
 def open_market(side: str, price_now: float):
-    """เปิดไม้แรก: ยิงครั้งเดียวเต็มจำนวนที่ 'พอ' แต่ไม่เกิน MAX_NOTIONAL และตั้งกรอบสำหรับ 'เติมครั้งเดียว' ภายหลัง"""
     global position, fill_plan
 
     bal = get_free_usdt() or 0.0
     usable = max(0.0, (bal - MARGIN_BUFFER_USDT)) * TARGET_POSITION_SIZE_FACTOR
     affordable_notional = usable * LEVERAGE
+
+    # ถ้าทุนถึงเพดาน → ใช้ MAX_NOTIONAL, ไม่งั้นเปิดเท่าที่ทุนพอ (ไม่ตั้งแผนเติม)
     target_notional = min(affordable_notional, MAX_NOTIONAL)
     if target_notional <= 0:
         send_telegram("⛔ ไม่พอ margin เปิดออเดอร์"); return False
 
     qty = contracts_from_notional(price_now, target_notional)
     if qty <= 0:
-        send_telegram("⛔ คำนวณจำนวนสัญญาไม่ได้"); return False
+        send_telegram("⛔ คำนวณจำนวนสัญญาไม่ได้ (น้อยกว่า min lot)"); return False
 
     side_ccxt = 'buy' if side=='long' else 'sell'
     try:
@@ -469,20 +473,29 @@ def open_market(side: str, price_now: float):
                     'sl': None,'step': 0,'opened_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
         entry_ref = float(position['entry'])
-        fill_plan = {
-            'target_notional': float(target_notional),
-            'entry_ref': entry_ref,
-            'band_low': float(entry_ref - ENTRY_BAND_PTS),
-            'band_high': float(entry_ref + ENTRY_BAND_PTS),
-            'add_disabled': False
-        }
+
+        # ✅ ตั้งแผน “เติมครั้งเดียวในกรอบ” เฉพาะเมื่อชนเพดาน MAX_NOTIONAL เท่านั้น
+        if affordable_notional >= MAX_NOTIONAL - 1e-6:
+            fill_plan = {
+                'target_notional': float(MAX_NOTIONAL),
+                'entry_ref': entry_ref,
+                'band_low': float(entry_ref - ENTRY_BAND_PTS),
+                'band_high': float(entry_ref + ENTRY_BAND_PTS),
+                'add_disabled': False
+            }
+            cap_line = f"🧰 Cap: <code>{fmt_usd(MAX_NOTIONAL)} USDT</code> | " \
+                       f"📎 Band: <code>[{fmt_usd(entry_ref-ENTRY_BAND_PTS)}, {fmt_usd(entry_ref+ENTRY_BAND_PTS)}]</code>"
+        else:
+            # ไม่ถึงเพดาน → ปิดการเติม
+            fill_plan = {'target_notional': 0.0, 'entry_ref': entry_ref,
+                         'band_low': None, 'band_high': None, 'add_disabled': True}
+            cap_line = f"🧰 Notional: <code>{fmt_usd(target_notional)} USDT</code> (ต่ำกว่าเพดาน, ไม่ตั้งแผนเติม)"
 
         send_telegram(
             "✅ เปิดโพซิชัน <b>{}</b>\n"
             f"📦 Size: <code>{position['contracts']:.6f}</code>\n"
             f"🎯 Entry: <code>{fmt_usd(entry_ref)}</code>\n"
-            f"🧰 Cap: <code>{fmt_usd(fill_plan['target_notional'])} USDT</code>\n"
-            f"📎 Band: <code>[{fmt_usd(fill_plan['band_low'])}, {fmt_usd(fill_plan['band_high'])}]</code>"
+            f"{cap_line}"
             .format(side.upper())
         )
 
@@ -495,17 +508,13 @@ def open_market(side: str, price_now: float):
         if set_sl_close_position(side, sl0):
             position['sl'] = float(sl0)
 
-        dbg("OPEN_SET_SL0",
-            side=side, entry=entry_ref, qty=position['contracts'],
-            target_notional=fill_plan['target_notional'],
-            band_low=fill_plan['band_low'], band_high=fill_plan['band_high'])
         return True
 
     except Exception as e:
         logger.error(f"open_market error (OKX): {e}")
         send_telegram(f"❌ Open order error (OKX): {e}")
         return False
-
+        
 def safe_close_position(reason: str = "") -> bool:
     """ปิดโพซิชันแบบปลอดภัย (OKX): ยกเลิกคำสั่งค้าง -> reduceOnly market -> ยืนยันปิด"""
     global position
@@ -751,17 +760,25 @@ def handle_entry_logic(price_now: float):
 
 # ================== Fill once when back-in-band ==================
 def maybe_fill_remaining(price_now: float):
-    """ถ้าราคา 'กลับเข้ากรอบ' และยังไม่เต็ม cap -> เติมครั้งเดียวให้ครบ; ถ้าหลุด band stop -> หยุดเติม"""
+    """เติมครั้งเดียวเมื่อ 'กลับเข้ากรอบ' เฉพาะเคสที่เปิดไม้แรกชนเพดาน MAX_NOTIONAL.
+       ถ้าหลุด band stop ให้หยุดเติมทันที"""
     global fill_plan, position
-    if not position: return
-    if fill_plan.get('target_notional', 0.0) <= 0: return
-    if fill_plan.get('add_disabled', False): return
+    if not position:
+        return
 
-    side = position['side']
+    # ✅ เติมเฉพาะเมื่อเปิดไม้แรก 'ชนเพดาน' เท่านั้น
+    tgt = float(fill_plan.get('target_notional', 0.0))
+    if tgt < MAX_NOTIONAL - 1e-6:   # ถ้าไม้แรกไม่ชนเพดาน → ไม่เติม
+        return
+    if fill_plan.get('add_disabled', False):
+        return
+
+    side      = position['side']
     entry_ref = float(fill_plan['entry_ref'])
     band_low  = float(fill_plan['band_low'])
     band_high = float(fill_plan['band_high'])
 
+    # ---- band stop / band check ----
     if side == 'long':
         band_stop = entry_ref - (ENTRY_BAND_PTS + ENTRY_BAND_STOP_EXTRA)
         if price_now < band_stop:
@@ -770,7 +787,7 @@ def maybe_fill_remaining(price_now: float):
             return
         if (price_now < band_low) or (price_now > band_high):
             return
-    else:
+    else:  # short
         band_stop = entry_ref + (ENTRY_BAND_PTS + ENTRY_BAND_STOP_EXTRA)
         if price_now > band_stop:
             fill_plan['add_disabled'] = True
@@ -779,12 +796,13 @@ def maybe_fill_remaining(price_now: float):
         if (price_now < band_low) or (price_now > band_high):
             return
 
-    target = float(fill_plan['target_notional'])
+    # ---- คำนวณ notional ที่ยังขาดจาก cap ----
     current_est = approx_position_notional(price_now)
-    remain = max(0.0, target - current_est)
+    remain = max(0.0, tgt - current_est)
     if remain <= 1e-6:
         return
 
+    # ---- เช็คเงิน/มาร์จิน และจำนวนสัญญาขั้นต่ำ (0.01) ----
     bal = get_free_usdt() or 0.0
     usable = max(0.0, (bal - MARGIN_BUFFER_USDT)) * TARGET_POSITION_SIZE_FACTOR
     affordable = usable * LEVERAGE
@@ -792,8 +810,9 @@ def maybe_fill_remaining(price_now: float):
     if take_notional <= 0:
         return
 
-    qty = contracts_from_notional(price_now, take_notional)
+    qty = contracts_from_notional(price_now, take_notional)  # จะคืน 0 ถ้า < 0.01
     if qty <= 0:
+        # กัน error: amount must be greater than minimum amount precision of 0.01
         return
 
     side_ccxt = 'buy' if side == 'long' else 'sell'
@@ -802,17 +821,19 @@ def maybe_fill_remaining(price_now: float):
         time.sleep(0.5)
         pos = fetch_position()
         if not pos:
-            send_telegram("⚠️ เติมไม่สำเร็จ: ตรวจไม่เจอตำแหน่งหลังเติม"); return
+            send_telegram("⚠️ เติมไม่สำเร็จ: ตรวจไม่เจอตำแหน่งหลังเติม")
+            return
+
         send_telegram(
             "➕ เติมโพซิชันครั้งเดียว (กลับเข้ากรอบ)\n"
             f"🧰 เติมเพิ่ม≈ <code>{fmt_usd(take_notional)} USDT</code>\n"
             f"📌 ราคาเติม≈ <code>{fmt_usd(price_now)}</code>"
         )
-        fill_plan['add_disabled'] = True
+        fill_plan['add_disabled'] = True  # เติมครั้งเดียวจบ
     except Exception as e:
         logger.error(f"fill_remaining error: {e}")
         send_telegram(f"❌ เติมไม่สำเร็จ: {e}")
-
+        
 # ================== Monitoring & Trailing ==================
 def monitor_position_and_trailing(price_now: float):
     global position, last_manual_tp_alert_ts, next_plan_after_forced_close
