@@ -57,6 +57,9 @@ NEW_SIGNAL_SL_OFFSET = 100.0
 # ---- สวิตช์ยืนยัน H1 สวนกี่แท่งปิด ----
 H1_OPP_CONFIRM_BARS = 2
 
+# แตะ EMA200 ระหว่างแท่ง (live) หรือเฉพาะแท่งปิด
+TOUCH_EMA200_LIVE = True
+
 # ---- Snapshot logging (INFO) ----
 SNAPSHOT_LOG_INTERVAL_SEC = 30
 
@@ -667,24 +670,49 @@ def check_m5_env():
     o = exchange.fetch_ohlcv(SYMBOL_U, timeframe=TIMEFRAME_M5, limit=limit)
     if not o or len(o) < EMA200_M5 + 5:
         return None
-    ts = o[-2][0]
-    closes = [c[4] for c in o[:-1]]
-    highs  = [c[2] for c in o[:-1]]
-    lows   = [c[3] for c in o[:-1]]
 
-    close_now = closes[-1]
-    ema200    = last_ema(closes, EMA200_M5)
-    macd      = macd_from_closes(closes)
+    # แท่งปิดล่าสุด
+    ts_closed = o[-2][0]
+    closes_closed = [c[4] for c in o[:-1]]
+    highs_closed  = [c[2] for c in o[:-1]]
+    lows_closed   = [c[3] for c in o[:-1]]
+
+    # แท่งกำลังวิ่ง (live)
+    live = o[-1]
+    live_high = live[2]
+    live_low  = live[3]
+    # ราคาปัจจุบันให้แม่น ใช้ ticker
+    try:
+        price_now = exchange.fetch_ticker(SYMBOL_U)['last']
+    except Exception:
+        price_now = closes_closed[-1]
+
+    ema200 = last_ema(closes_closed, EMA200_M5)
+    macd   = macd_from_closes(closes_closed)  # MACD ใช้จากแท่งปิดเท่านั้น
 
     if macd:
         dif_p, dif_n, dea_p, dea_n = macd
-        dbg("M5_ENV", ts=ts, close=close_now, ema200=ema200,
+        dbg("M5_ENV",
+            ts=ts_closed, close_closed=closes_closed[-1],
+            ema200=ema200, price_now=price_now,
+            live_high=live_high, live_low=live_low,
             dif_prev=dif_p, dif_now=dif_n, dea_prev=dea_p, dea_now=dea_n)
     else:
-        dbg("M5_ENV", ts=ts, close=close_now, ema200=ema200, macd=None)
+        dbg("M5_ENV",
+            ts=ts_closed, close_closed=closes_closed[-1],
+            ema200=ema200, price_now=price_now,
+            live_high=live_high, live_low=live_low, macd=None)
 
-    return {'ts': ts, 'close': close_now, 'high': highs[-1], 'low': lows[-1], 'ema200': ema200, 'macd': macd}
-
+    return {
+        'ts_closed': ts_closed,
+        'close_closed': closes_closed[-1],
+        'ema200': ema200,
+        'macd': macd,               # สำหรับ MACD cross (แท่งปิด)
+        'price_now': price_now,     # สำหรับตรวจแตะ EMA200 แบบ live
+        'live_high': live_high,
+        'live_low': live_low
+    }
+    
 def handle_entry_logic(price_now: float):
     global entry_plan, h1_baseline_dir
 
@@ -696,12 +724,18 @@ def handle_entry_logic(price_now: float):
     if not env or env['ema200'] is None or env['macd'] is None:
         return
 
-    m5_ts  = env['ts']
-    close  = env['close']
-    high   = env['high']
-    low    = env['low']
-    ema200 = env['ema200']
+    # รองรับทั้งรูปแบบ env เดิม และแบบใหม่ที่มี live_* (เผื่อยังไม่ได้แก้ check_m5_env)
+    m5_ts   = env.get('ts_closed', env.get('ts'))
+    close   = env.get('close_closed', env.get('close'))
+    high    = env.get('high')   # จากแท่งปิดล่าสุด
+    low     = env.get('low')    # จากแท่งปิดล่าสุด
+    ema200  = env['ema200']
     dif_p, dif_n, dea_p, dea_n = env['macd']
+
+    # ค่าจากแท่งกำลังวิ่ง (ถ้า check_m5_env ใหม่จะมีให้; ถ้าไม่มีก็ fallback เป็นค่าจากแท่งปิด)
+    live_high = env.get('live_high', high if high is not None else close)
+    live_low  = env.get('live_low',  low  if low  is not None else close)
+    price_now = env.get('price_now', price_now)
 
     if entry_plan['m5_last_bar_ts'] == m5_ts:
         return
@@ -743,22 +777,37 @@ def handle_entry_logic(price_now: float):
 
     if entry_plan['stage'] == 'armed':
         if want == 'long':
-            touched = (low <= ema200)
-            macd_initial_ok = (dif_n < dea_n)
-            dbg("M5_ARMED_CHECK", want=want, low=low, ema200=ema200, dif_now=dif_n, dea_now=dea_n,
-                touched=touched, macd_initial_ok=macd_initial_ok)
+            # แตะ EMA200 ใช้ live_low ถ้าเปิดโหมด live; ไม่งั้นใช้ low (แท่งปิด)
+            touched = (live_low <= ema200) if TOUCH_EMA200_LIVE else (low <= ema200)
+            macd_initial_ok = (dif_n < dea_n)  # MACD ยังดูจากแท่งปิด
+            dbg("M5_ARMED_CHECK",
+                want=want, ema200=ema200,
+                live_low=live_low, last_low=low, price_now=price_now,
+                touched=touched, macd_initial_ok=macd_initial_ok, live=TOUCH_EMA200_LIVE)
             if touched and macd_initial_ok:
                 entry_plan.update(stage='wait_macd_cross', m5_touch_ts=m5_ts, macd_initial='buy-<')
-                send_once(f"m5touch:{plan_tag}", "⏳ M5 แตะ/เลย EMA200 ลง → รอ DIF ตัดขึ้นเพื่อเข้า <b>LONG</b>")
+                send_once(
+                    f"m5touch:{plan_tag}",
+                    "⏳ M5 (LIVE) แตะ/เลย EMA200 ลง → รอ DIF ตัดขึ้นเพื่อเข้า <b>LONG</b>"
+                    if TOUCH_EMA200_LIVE else
+                    "⏳ M5 แตะ/เลย EMA200 ลง (แท่งปิด) → รอ DIF ตัดขึ้นเพื่อเข้า <b>LONG</b>"
+                )
                 return
         else:
-            touched = (high >= ema200)
+            touched = (live_high >= ema200) if TOUCH_EMA200_LIVE else (high >= ema200)
             macd_initial_ok = (dif_n > dea_n)
-            dbg("M5_ARMED_CHECK", want=want, high=high, ema200=ema200, dif_now=dif_n, dea_now=dea_n,
-                touched=touched, macd_initial_ok=macd_initial_ok)
+            dbg("M5_ARMED_CHECK",
+                want=want, ema200=ema200,
+                live_high=live_high, last_high=high, price_now=price_now,
+                touched=touched, macd_initial_ok=macd_initial_ok, live=TOUCH_EMA200_LIVE)
             if touched and macd_initial_ok:
                 entry_plan.update(stage='wait_macd_cross', m5_touch_ts=m5_ts, macd_initial='sell->')
-                send_once(f"m5touch:{plan_tag}", "⏳ M5 แตะ/เลย EMA200 ขึ้น → รอ DIF ตัดลงเพื่อเข้า <b>SHORT</b>")
+                send_once(
+                    f"m5touch:{plan_tag}",
+                    "⏳ M5 (LIVE) แตะ/เลย EMA200 ขึ้น → รอ DIF ตัดลงเพื่อเข้า <b>SHORT</b>"
+                    if TOUCH_EMA200_LIVE else
+                    "⏳ M5 แตะ/เลย EMA200 ขึ้น (แท่งปิด) → รอ DIF ตัดลงเพื่อเข้า <b>SHORT</b>"
+                )
                 return
 
     elif entry_plan['stage'] == 'wait_macd_cross':
@@ -771,7 +820,7 @@ def handle_entry_logic(price_now: float):
             entry_plan.update(stage='idle', m5_touch_ts=None, macd_initial=None)
             if not ok:
                 send_telegram("⛔ เปิดออเดอร์ไม่สำเร็จ")
-
+                
 # ================== Fill once when back-in-band ==================
 def maybe_fill_remaining(price_now: float):
     """เติมครั้งเดียวเมื่อ 'กลับเข้ากรอบ' เฉพาะเคสที่เปิดไม้แรกชนเพดาน MAX_NOTIONAL.
