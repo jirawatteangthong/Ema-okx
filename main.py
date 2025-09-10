@@ -85,7 +85,7 @@ ENTRY_BAND_STOP_EXTRA = 100.0  # ถ้าหลุดฝั่งสวนเ�
 
 # ---- Test/Bypass: เริ่มรันแล้วข้าม H1 cross ไป M5 ได้เลย ----
 # None = ปิด (ค่าเดิม), 'long' หรือ 'short' = เริ่มหาเข้า M5 ทันทีตามทิศที่เลือก
-START_FORCE_PLAN = 'short'  # ตั้ง 'short' ถ้าจะลองขา short ทันที
+START_FORCE_PLAN = None  # ตั้ง 'short' ถ้าจะลองขา short ทันที
 
 # ================== logging ==================
 logging.basicConfig(
@@ -962,6 +962,18 @@ def monitor_position_and_trailing(price_now: float):
     if not position: return
     side, entry = position['side'], position['entry']
     pnl_pts = (price_now - entry) if side=='long' else (entry - price_now)
+        # --- Soft SL enforcement (LIVE) ---
+    sl = position.get('sl')
+    if sl is not None:
+        sl_hit = (price_now <= sl) if side == 'long' else (price_now >= sl)
+        dbg("SL_CHECK", side=side, price_now=price_now, sl=sl, sl_hit=sl_hit)
+        if sl_hit:
+            tag = f"slhit:{position['opened_at']}"
+            send_once(tag, f"🛡️ Soft SL HIT @ <code>{fmt_usd(sl)}</code> → ปิดโพซิชันทันที")
+            ok = safe_close_position(reason="soft SL hit")
+            if not ok:
+                send_telegram("⚠️ ปิดด้วย SL ไม่สำเร็จ โปรดตรวจสอบบน OKX")
+            return  # จบฟังก์ชันรอบนี้
 
     if position['step'] < 1 and pnl_pts >= STEP1_TRIGGER:
         new_sl = (entry + STEP1_SL_OFFSET) if side=='long' else (entry - STEP1_SL_OFFSET)
