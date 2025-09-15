@@ -50,7 +50,7 @@ AUTO_CLOSE_TRIGGER         = 1400.0
 
 # H1 opposite handling
 NEW_SIGNAL_ACTION = 'close_now'   # 'close_now'|'tighten_sl'
-H1_OPP_CONFIRM_BARS = 1           # 1 หรือ 2
+H1_OPP_CONFIRM_BARS = 2          # 1 หรือ 2
 
 # พฤติกรรมหลังปิดโพซิชัน
 AFTER_NORMAL_CLOSE_BEHAVIOR      = 'wait_new_cross'  # ปิดปกติ → รอ H1 cross ครั้งใหม่
