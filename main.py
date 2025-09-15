@@ -13,7 +13,7 @@ TIMEFRAME_H1  = '1h'
 TIMEFRAME_M5  = '5m'
 
 # Leverage / Margin
-LEVERAGE                = 38     # เปลี่ยนเป็น 30 ได้เลย
+LEVERAGE                = 38    # เปลี่ยนเป็น 30 ได้เลย
 OKX_MARGIN_MODE         = 'isolated'
 TARGET_POSITION_SIZE_FACTOR = 0.9
 MARGIN_BUFFER_USDT      = 5
