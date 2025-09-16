@@ -49,7 +49,7 @@ MANUAL_CLOSE_ALERT_TRIGGER = 1300.0
 AUTO_CLOSE_TRIGGER         = 1400.0
 
 # H1 opposite handling
-NEW_SIGNAL_ACTION = 'close_now'   # 'close_now'|'tighten_sl'
+NEW_SIGNAL_ACTION = 'tighten_sl'   # 'close_now'|'tighten_sl'
 H1_OPP_CONFIRM_BARS = 2          # 1 หรือ 2
 
 # พฤติกรรมหลังปิดโพซิชัน
@@ -60,7 +60,7 @@ AFTER_H1_FORCED_CLOSE_BEHAVIOR   = 'arm_current'     # ปิดเพราะ 
 TOUCH_EMA200_LIVE = True
 
 # TEST: ข้าม H1 cross ไหม? ('long'|'short'|None)
-START_FORCE_PLAN = None
+START_FORCE_PLAN = 'long'
 
 # Loop
 FAST_LOOP_SECONDS = 3
