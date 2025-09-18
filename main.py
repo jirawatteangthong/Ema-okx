@@ -60,7 +60,7 @@ AFTER_H1_FORCED_CLOSE_BEHAVIOR   = 'arm_current'     # ปิดเพราะ 
 TOUCH_EMA200_LIVE = True
 
 # TEST: ข้าม H1 cross ไหม? ('long'|'short'|None)
-START_FORCE_PLAN = 'long'
+START_FORCE_PLAN = None
 
 # Loop
 FAST_LOOP_SECONDS = 3
