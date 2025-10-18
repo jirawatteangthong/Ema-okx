@@ -15,7 +15,7 @@ TIMEFRAME_M5  = '5m'
 # Leverage / Margin
 LEVERAGE                = 30   # เปลี่ยนเป็น 30 ได้เลย
 OKX_MARGIN_MODE         = 'isolated'
-TARGET_POSITION_SIZE_FACTOR = 0.9
+TARGET_POSITION_SIZE_FACTOR = 0.8
 MARGIN_BUFFER_USDT      = 5
 
 # เพดาน notional ต่อแผน
