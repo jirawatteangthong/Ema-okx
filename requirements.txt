@@ -1,2 +1,5 @@
 ccxt
+pandas
+numpy
 requests
+python-dateutil
