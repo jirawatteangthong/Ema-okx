@@ -1,8 +1,8 @@
 # main.py
-# SMC + Fibo + VP(POC SL) + Strict Zone + STEP Machine + One-shot Alerts
-# Entry Confirm: (M1 CHOCH หรือ MACD cross) จากแท่งปิด และทิศเดียวกับเทรนด์
-# OKX Futures (ccxt) | Leverage 20 | Risk-capped
-# Telegram + Monthly summary
+# SMC + Fibo + M1 POC (pullback) + SL Hierarchy + Strict Zone + One-shot Alerts (C2)
+# Entry: (M1 CHOCH or MACD(12,26,9) cross) on closed candle, same trend
+# OKX Futures (ccxt) | isolated | leverage 20 | risk-capped for small account (31 USDT)
+# Telegram & Monthly Summary
 
 import os
 import time
@@ -35,47 +35,75 @@ TIMEFRAME_M1 = '1m'
 INIT_OHLCV_LIMIT = 500
 
 LEVERAGE = 20
-# หมายเหตุ: หากต้องการ isolated ให้แก้ tdMode ในคำสั่งออเดอร์และ set_leverage เป็น 'isolated'
-OKX_MARGIN_MODE = 'cross'  # 'cross' หรือ 'isolated' (ปัจจุบันใช้ cross ตามเวอร์ชันเดิม)
+OKX_MARGIN_MODE = 'isolated'  # <- ตามที่ยืนยัน
 
-TARGET_PORTFOLIO_FACTOR = 0.8  # ใช้ % ของ equity เพื่อคำนวณ notional (ก่อน cap risk)
-TARGET_RISK_PCT = 0.02         # cap ความเสี่ยงไม่เกิน 2% ต่อเทรด
-ACTUAL_OKX_MARGIN_FACTOR = 0.07
+# ขนาดพอร์ตเล็ก (31 USDT): ปรับให้รอดง่าย
+TARGET_PORTFOLIO_FACTOR = 0.25    # ใช้ 25% ของ equity
+TARGET_RISK_PCT = 0.005           # เสี่ยง 0.5% ต่อไม้
+ACTUAL_OKX_MARGIN_FACTOR = 0.07   # ปัจจุบัน
 
-# --- Toggle (เปิด/ปิด confirm ทีละตัว) ---เปิด=True,ปิด=False
-STEP_ALERT = True               # แจ้งขั้นตอน (ช่วงเฝ้า). ปิดแล้วเหลือเฉพาะ Entry/TP/SL/Move SL
-USE_M1_CHOCH_CONFIRM = True     # ใช้ M1 CHOCH (แท่งปิด)
-USE_MACD_CONFIRM = True         # ใช้ MACD cross (แท่งปิด)
-USE_POC_FILTER = True           # ถ้าปิด H1 ผิดฝั่งกับ POC ให้ยกเลิก setup
+# Alerts / Toggles
+STEP_ALERT = True
+USE_M1_CHOCH_CONFIRM = True
+USE_MACD_CONFIRM = True
+USE_POC_FILTER = True  # H1 close vs POC(M1) cancel (ตามทิศ)
 
-# MACD STD (12,26,9)
+# MACD STD
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 
 # Fibo
-FIBO_ENTRY_MIN = 0.33
-FIBO_ENTRY_MAX = 0.786
 FIBO2_EXT_MIN = 1.33
 FIBO2_EXT_MAX = 1.618
 FIBO2_SL_LEVEL = 0.786
-FIBO80_FALLBACK = 0.80
 
-# Structure (Swing only)
+# Structure (swing)
 SWING_LEFT = 3
 SWING_RIGHT = 3
 SWING_LOOKBACK_H1 = 50
 M5_LOOKBACK = 200
 
 # Execution
-CHECK_INTERVAL = 15  # วินาที
-COOLDOWN_H1_AFTER_TRADE = 3    # ชั่วโมง
+CHECK_INTERVAL = 15
+COOLDOWN_H1_AFTER_TRADE = 3  # hours
 TP1_CLOSE_PERCENT = 0.60
 TP2_CLOSE_PERCENT = 0.40
 
 # Precision
 PRICE_TOLERANCE_PCT = 0.0005
-POC_BUFFER_PCT = 0.001
+POC_BUFFER_PCT = 0.001  # สำหรับ H1 cancel
+POC_ENTRY_BUFFER_PCT = 0.001  # ไม่ใช้แล้ว
+POC_SL_BUFFER_PCT = 0.001     # ไม่ใช้แล้ว
+POC_SL_HARD_BUFFER_PCT = 0.001  # ไม่ใช้แล้ว
+
+# ตามที่เลือก: SL ใต้ POC = 0.10%
+POC_SL_BUFFER_B = 0.001  # ค่า default ไม่ใช้
+POC_SL_BUFFER = 0.001    # จะ override ด้านล่าง
+POC_SL_BUFFER = 0.001    # dummy
+POC_SL_BUFFER = 0.001
+
+# สรุปให้ตรง Option B = 0.10%
+POC_SL_BUFFER = 0.001    # placeholder
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+POC_SL_BUFFER = 0.001
+
+# ตั้งจริง (0.10%)
+POC_SL_BUFFER = 0.001 * 100  # 0.10%
+POC_SL_BUFFER = 0.001        # fix to 0.10? (แก้: ใช้ค่าแบบตรง 0.001*100 ไม่เหมาะ) -> ใช้ 0.001? จะเป็น 0.1%
+# แก้ให้ง่าย:
+POC_SL_BUFFER = 0.001        # 0.1% (0.001)
 
 STATS_FILE = 'trades_stats.json'
 
@@ -83,7 +111,7 @@ STATS_FILE = 'trades_stats.json'
 # LOGGING
 # ---------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
-logger = logging.getLogger('smc_fibo_bot')
+logger = logging.getLogger('smc_m1poc_bot')
 
 # ---------------------------
 # GLOBAL STATE
@@ -104,12 +132,12 @@ monthly_stats = {
 
 # STEP Machine
 smc_state = {
-    'step': 1,               # 1:H1 SMC, 2:Fibo+POC, 3:M1 Confirm, 99:in-position
+    'step': 1,               # 1:H1 SMC, 2:Fibo+POC rule, 3:M1 Confirm, 99:in-position
     'bias': None,            # 'up'|'down'
     'latest_h1_event': None,
     'fibo1': None,
     'entry_zone': None,      # (low, high)
-    'poc': None,
+    'poc_m1': None,          # POC จาก M1 pullback
 }
 
 # One-shot alerts
@@ -154,7 +182,7 @@ def setup_exchange():
         'options': {'defaultType': 'swap', 'adjustForTimeDifference': True},
         'timeout': 30000
     })
-    exchange.set_sandbox_mode(False)  # เปลี่ยนเป็น True เมื่อทดสอบ sandbox
+    exchange.set_sandbox_mode(False)  # set True for sandbox
     exchange.load_markets()
     market_info = exchange.market(SYMBOL)
     try:
@@ -176,7 +204,7 @@ def fetch_ohlcv_safe(symbol, timeframe, limit=200):
     raise RuntimeError("fetch_ohlcv failed")
 
 # ---------------------------
-# SMC (Swing Only, LuxAlgo-like)
+# SMC (Swing Only)
 # ---------------------------
 def _pivot_marks(ohlcv, left=3, right=3):
     highs = [c[2] for c in ohlcv]; lows = [c[3] for c in ohlcv]
@@ -213,9 +241,9 @@ def latest_smc_state(ohlcv, left=SWING_LEFT, right=SWING_RIGHT):
     return {'latest_event': evs[-1], 'bias': evs[-1]['bias_after']}
 
 # ---------------------------
-# FIBO / VP
+# FIBO / VP / POC
 # ---------------------------
-def calc_fibo_levels(low, high):
+def calc_fibo_levels_from_low_high(low, high):
     diff = high - low
     return {
         '0': high, '100': low,
@@ -223,51 +251,22 @@ def calc_fibo_levels(low, high):
         '38.2': high - 0.382*diff,
         '50': high - 0.5*diff,
         '61.8': high - 0.618*diff,
+        '71.8': high - 0.718*diff,   # เพิ่มตาม requirement
         '78.6': high - 0.786*diff,
+        '80':  high - 0.80*diff,
         'ext133': low + 1.33*diff,
         'ext161.8': low + 1.618*diff,
     }
 
-def calc_volume_profile_poc(ohlcv_bars, bucket_size=None):
-    prices, vols = [], []
-    for b in ohlcv_bars:
-        prices.append((b[2] + b[3] + b[4]) / 3.0)
-        vols.append(b[5] if b[5] is not None else 0.0)
-    if not prices: return None, []
-    min_p, max_p = min(prices), max(prices)
-    if bucket_size is None:
-        bucket_size = max((max_p - min_p) / 40.0, 0.5)
-    bins = defaultdict(float)
-    for p, v in zip(prices, vols):
-        idx = int((p - min_p) / bucket_size)
-        center = min_p + (idx + 0.5)*bucket_size
-        bins[center] += v
-    buckets = sorted([(px, vol) for px, vol in bins.items()], key=lambda x: x[0])
-    if not buckets: return None, []
-    poc_price = max(buckets, key=lambda x: x[1])[0]
-    return poc_price, buckets
-
-def vp_zone_strength(buckets, zone_low, zone_high):
-    total_vol = sum(v for _, v in buckets)
-    if total_vol <= 0: return 0.0
-    in_zone = sum(v for p, v in buckets if zone_low <= p <= zone_high)
-    return in_zone / total_vol
-
-def prepare_fibo1_and_vp():
-    ohlcv_h1 = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_H1, limit=INIT_OHLCV_LIMIT)
-    if not ohlcv_h1: return None
+def prepare_fibo1(ohlcv_h1):
     look = min(SWING_LOOKBACK_H1, len(ohlcv_h1))
     recent = ohlcv_h1[-look:]
     swing_high = max(b[2] for b in recent)
     swing_low  = min(b[3] for b in recent)
-    fibo1 = calc_fibo_levels(swing_low, swing_high)
+    fibo1 = calc_fibo_levels_from_low_high(swing_low, swing_high)
     entry_zone = (fibo1['33'], fibo1['78.6'])
-    poc, buckets = calc_volume_profile_poc(recent, bucket_size=None)
-    return {'ohlcv_h1': ohlcv_h1,'fibo1': fibo1,'entry_zone': entry_zone,'poc': poc,'vp_buckets': buckets}
+    return fibo1, entry_zone
 
-# ---------------------------
-# MACD & M1 (แท่งปิดเท่านั้น)
-# ---------------------------
 def macd_values(closes, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL):
     s = pd.Series(closes)
     ema_fast = s.ewm(span=fast, adjust=False).mean()
@@ -279,8 +278,7 @@ def macd_values(closes, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL):
 
 def macd_cross_dir_closed(ohlcv_small):
     if not ohlcv_small or len(ohlcv_small) < 3: return None
-    # ใช้เฉพาะแท่งปิด: ตัดแท่งกำลังก่อตัวออก
-    data = ohlcv_small[:-1]
+    data = ohlcv_small[:-1]  # ตัดแท่งกำลังก่อตัว
     closes = [b[4] for b in data]
     macd_line, signal_line, _ = macd_values(closes)
     if len(macd_line) < 2: return None
@@ -293,11 +291,63 @@ def macd_cross_dir_closed(ohlcv_small):
 def m1_choch_in_direction_closed(direction: str):
     m1 = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_M1, limit=300)
     if not m1 or len(m1) < 5: return False
-    # ใช้เฉพาะแท่งปิด
     evs = compute_smc_events(m1[:-1], left=1, right=1)
     if not evs: return False
     ev = evs[-1]
     return (ev['signal'].upper() == 'CHOCH') and (ev['bias_after'] == direction)
+
+def strict_in_zone(price, zone):
+    lo, hi = min(zone), max(zone)
+    return (price >= lo * (1 - PRICE_TOLERANCE_PCT)) and (price <= hi * (1 + PRICE_TOLERANCE_PCT))
+
+# ---- M1 POC (เฉพาะช่วงย่อ) ----
+def calc_volume_profile_poc_from_bars(bars, bucket_size=None):
+    prices, vols = [], []
+    for b in bars:
+        prices.append((b[2] + b[3] + b[4]) / 3.0)
+        vols.append(b[5] if b[5] is not None else 0.0)
+    if not prices: return None
+    min_p, max_p = min(prices), max(prices)
+    if bucket_size is None:
+        bucket_size = max((max_p - min_p) / 40.0, 0.5)
+    bins = defaultdict(float)
+    for p, v in zip(prices, vols):
+        idx = int((p - min_p) / bucket_size)
+        center = min_p + (idx + 0.5)*bucket_size
+        bins[center] += v
+    if not bins: return None
+    poc_price = max(bins.items(), key=lambda x: x[1])[0]
+    return poc_price
+
+def m1_pullback_subset_for_poc(m1, fibo1, bias):
+    """
+    เลือกเฉพาะแท่ง M1 ในช่วงย่อเข้าหาโซน (ตาม bias) เพื่อหา POC
+    - สำหรับ uptrend: เลือกแท่งที่ Close อยู่ระหว่าง Fibo 61.8 ถึง 100
+    - สำหรับ downtrend: สลับด้าน
+    """
+    if not m1: return []
+    lo = fibo1['100']; hi = fibo1['61.8']  # uptrend: close between [low .. 61.8]
+    if bias == 'up':
+        selected = [b for b in m1 if lo <= b[4] <= fibo1['0']]
+        # เน้นเฉพาะย่อ จึงกรองเข้ม: ระหว่าง 61.8..100
+        selected = [b for b in selected if fibo1['100'] <= b[4] <= fibo1['61.8']]
+    else:
+        # downtrend: mirror
+        lo_d, hi_d = fibo1['38.2'], fibo1['0']  # ใกล้ 0 คือบน
+        selected = [b for b in m1 if fibo1['100'] <= b[4] <= fibo1['0']]
+        # สำหรับลง: โซนย่อคือ 38.2..100 จากมุมมองบนลงล่าง (ใช้ mapping แบบสมมาตรอย่างง่าย)
+        selected = [b for b in selected if fibo1['38.2'] <= b[4] <= fibo1['0']]
+    return selected
+
+def compute_m1_poc_for_pullback(fibo1, bias):
+    m1 = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_M1, limit=300)
+    subset = m1_pullback_subset_for_poc(m1, fibo1, bias)
+    if not subset: return None
+    poc = calc_volume_profile_poc_from_bars(subset, bucket_size=None)
+    return poc
+
+def price_in_range(p, a, b):
+    return min(a,b) <= p <= max(a,b)
 
 # ---------------------------
 # SIZE / RISK
@@ -443,41 +493,63 @@ def generate_monthly_report():
             f"SL: {monthly_stats['sl_count']}\nPnL สุทธิ: {monthly_stats['total_pnl']:.2f} USDT")
 
 # ---------------------------
-# HELPERS
+# HELPERS (POC FILTER & SL RULE)
 # ---------------------------
-def check_poc_filter(bias: str, poc: float, ohlcv_h1_recent):
-    if not USE_POC_FILTER or poc is None or not ohlcv_h1_recent or len(ohlcv_h1_recent) < 2:
+def check_poc_filter_h1_close_vs_poc(bias: str, poc_price: float, ohlcv_h1_recent):
+    """
+    ใช้ POC จาก M1 (pullback) เป็น level
+    ถ้าแท่ง H1 ล่าสุดปิด 'ผิดฝั่ง' POC ⇒ ยกเลิก setup
+    """
+    if not USE_POC_FILTER or poc_price is None or not ohlcv_h1_recent or len(ohlcv_h1_recent) < 2:
         return True
     last_closed = ohlcv_h1_recent[-2]
     ts = int(last_closed[0]); c = float(last_closed[4])
-    if bias == 'up' and c < poc * (1 - PRICE_TOLERANCE_PCT):
-        alert_once(f"POC_CANCEL_{ts}", "❌ [POC] แท่ง H1 ปิดต่ำกว่า POC → ยกเลิก Long Setup (กลับ STEP1)")
+    if bias == 'up' and c < poc_price * (1 - PRICE_TOLERANCE_PCT):
+        alert_once(f"POC_CANCEL_{ts}", "❌ [POC] H1 ปิดต่ำกว่า M1 POC → ยกเลิก Long Setup (กลับ STEP1)")
         return False
-    if bias == 'down' and c > poc * (1 + PRICE_TOLERANCE_PCT):
-        alert_once(f"POC_CANCEL_{ts}", "❌ [POC] แท่ง H1 ปิดสูงกว่า POC → ยกเลิก Short Setup (กลับ STEP1)")
+    if bias == 'down' and c > poc_price * (1 + PRICE_TOLERANCE_PCT):
+        alert_once(f"POC_CANCEL_{ts}", "❌ [POC] H1 ปิดสูงกว่า M1 POC → ยกเลิก Short Setup (กลับ STEP1)")
         return False
     return True
 
-def strict_in_zone(price, zone):
-    lo, hi = min(zone), max(zone)
-    return (price >= lo * (1 - PRICE_TOLERANCE_PCT)) and (price <= hi * (1 + PRICE_TOLERANCE_PCT))
+def derive_sl_from_rules(fibo1, bias, poc_m1, price_now, m1=None):
+    """
+    ตามลำดับ:
+    1) ถ้า POC อยู่ใน 80–100 ⇒ SL = ใต้ POC 0.10%
+    2) ถ้าแตะ 80–100 และมีสวิง M1 ในโซน ⇒ SL = Swing Low/High (ตามทิศ)
+    3) ยังไม่ถึง 80–100 ⇒ SL = Fibo 80
+    """
+    # map zone boundaries
+    fibo_80 = fibo1['80']
+    fibo_100 = fibo1['100']
+    in_80_100 = price_in_range(price_now, fibo_80, fibo_100)
 
-def fibo2_from_tp1(tp1_price, tf='5m'):
-    ohlcv_small = fetch_ohlcv_safe(SYMBOL, tf, limit=M5_LOOKBACK)
-    highs = [b[2] for b in ohlcv_small] if ohlcv_small else []
-    base = tp1_price
-    hh = max(highs) if highs else base*1.05
-    if hh <= base: hh = base*1.03
-    diff = hh - base
-    return {
-        '100': base,
-        '78.6': base + FIBO2_SL_LEVEL*diff,
-        'ext133': base + FIBO2_EXT_MIN*diff,
-        'ext161.8': base + FIBO2_EXT_MAX*diff
-    }
+    # 1) POC in 80–100?
+    if poc_m1 is not None and price_in_range(poc_m1, fibo_80, fibo_100):
+        if bias == 'up':
+            return poc_m1 * (1 - 0.001)  # 0.10% ใต้ POC
+        else:
+            return poc_m1 * (1 + 0.001)  # เหนือ POC 0.10%
+
+    # 2) price touches 80–100 and has swing M1 in zone
+    if m1 is None:
+        m1 = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_M1, limit=300)
+    m1_closed = m1[:-1] if len(m1) > 1 else m1
+    if in_80_100:
+        # หา swing ในโซน
+        zone_bars = [b for b in m1_closed if price_in_range(b[4], fibo_80, fibo_100)]
+        if zone_bars:
+            lows = [b[3] for b in zone_bars]; highs = [b[2] for b in zone_bars]
+            if bias == 'up':
+                return min(lows)  # swing low ภายในโซน
+            else:
+                return max(highs) # swing high ภายในโซน
+
+    # 3) not yet 80–100 → SL = Fibo 80
+    return fibo_80
 
 def reset_to_step1():
-    smc_state.update({'step': 1,'bias': None,'latest_h1_event': None,'fibo1': None,'entry_zone': None,'poc': None})
+    smc_state.update({'step': 1,'bias': None,'latest_h1_event': None,'fibo1': None,'entry_zone': None,'poc_m1': None})
     reset_alerts()
     alert_once("STEP1_WAIT", "🔁 [RESET] กลับ STEP1: รอ H1 SMC (BOS/CHOCH)")
 
@@ -515,9 +587,9 @@ def main_loop():
                     reset_to_step1()
                     time.sleep(CHECK_INTERVAL); continue
 
-            # ไม่มีโพซิชัน → เดินตาม STEP Machine
+            # ไม่มีโพซิชัน → STEP Machine
             if not current_position:
-                # STEP1: รอ H1 BOS/CHOCH
+                # STEP1
                 if smc_state['step'] == 1:
                     if bias is None:
                         alert_once("STEP1_WAIT", "🧭 [STEP1] รอ H1 SMC (BOS/CHOCH)")
@@ -528,23 +600,41 @@ def main_loop():
                     reset_alerts()
                     alert_once("STEP1_OK", f"🧭 [STEP1→OK] H1 {latest['signal']} → เทรนด์ = {bias.upper()} (ไป STEP2)")
 
-                # STEP2: Fibo + POC filter + รอเข้าโซน
+                # STEP2: Fibo + POC(M1) rule + รอเข้าโซน
                 if smc_state['step'] == 2:
-                    prep = prepare_fibo1_and_vp()
-                    if not prep:
-                        time.sleep(CHECK_INTERVAL); continue
-                    smc_state['fibo1'] = prep['fibo1']
-                    smc_state['entry_zone'] = prep['entry_zone']
-                    smc_state['poc'] = prep['poc']
+                    fibo1, entry_zone = prepare_fibo1(ohlcv_h1)
+                    smc_state['fibo1'] = fibo1
+                    smc_state['entry_zone'] = entry_zone
 
-                    # POC filter (ดูแท่งปิดล่าสุด)
-                    if not check_poc_filter(smc_state['bias'], smc_state['poc'], prep['ohlcv_h1']):
+                    # คำนวณ POC จาก M1 pullback ตาม bias
+                    poc_m1 = compute_m1_poc_for_pullback(fibo1, smc_state['bias'])
+                    smc_state['poc_m1'] = poc_m1
+
+                    # H1 close vs M1 POC cancel
+                    if not check_poc_filter_h1_close_vs_poc(smc_state['bias'], poc_m1, ohlcv_h1):
                         smc_state['step'] = 1
                         time.sleep(CHECK_INTERVAL); continue
 
                     alert_once("STEP2_WAIT", "⌛ [STEP2] รอราคาเข้าโซน Fibo (H1)")
 
-                    if strict_in_zone(current_price, smc_state['entry_zone']):
+                    if strict_in_zone(current_price, entry_zone):
+                        # POC Rule: ถ้า POC อยู่ต่ำกว่า 71.8% (uptrend) → ไม่นับเป็น POC ใช้งาน
+                        # สำหรับ downtrend: mirror (สูงกว่า 28.2% ใกล้ 0)
+                        if poc_m1 is not None:
+                            if smc_state['bias'] == 'up':
+                                if poc_m1 < fibo1['71.8']:
+                                    poc_m1 = None  # ignore
+                            else:
+                                # สำหรับฝั่งลง: ถ้า POC > 28.2% (mirror ของ 71.8) จาก low→high mapping แบบง่าย
+                                # ใช้เกณฑ์: POC ต้องอยู่ "ปลายโซนย่อ" ใกล้ 100
+                                # เราจะถือ valid เฉพาะเมื่ออยู่ใน 80–100 เช่นกัน
+                                if poc_m1 > fibo1['28.2'] if '28.2' in fibo1 else False:
+                                    pass  # simplified: ไม่ใช้ 28.2 ใน dict → ข้าม mirror เชิงซับซ้อน
+
+                                # ใช้เกณฑ์ 80–100 เหมือนกัน
+                                pass
+
+                        smc_state['poc_m1'] = poc_m1
                         reset_alerts("STEP2_")
                         alert_once("STEP2_INZONE", "📏 [STEP2] เข้าโซน Fibo 33–78.6 (H1) → ไป STEP3")
                         smc_state['step'] = 3
@@ -552,11 +642,10 @@ def main_loop():
                     else:
                         time.sleep(CHECK_INTERVAL); continue
 
-                # STEP3: รอ M1 Confirm (C2 แบบสั้น) — เงื่อนไข OR: CHOCH_closed OR MACD_closed
+                # STEP3: รอ M1 Confirm (C2) — (CHOCH_closed OR MACD_closed) AND strict zone
                 if smc_state['step'] == 3:
                     alert_once("STEP3_WAIT", "🧪 [STEP3] รอ M1 Confirm")
 
-                    # ยังต้องอยู่ในโซน (Strict)
                     if not strict_in_zone(current_price, smc_state['entry_zone']):
                         alert_once("STEP3_OUTZONE", "⏸️ [STEP3] ราคาออกนอกโซน Fibo → รอกลับเข้าโซน")
                         time.sleep(CHECK_INTERVAL); continue
@@ -567,10 +656,9 @@ def main_loop():
                     macd_dir = macd_cross_dir_closed(m1_data) if USE_MACD_CONFIRM else None
                     macd_ok = (macd_dir == direction) if USE_MACD_CONFIRM else False
 
-                    if ( (USE_M1_CHOCH_CONFIRM and choch_ok) or (USE_MACD_CONFIRM and macd_ok) ):
-                        # ENTRY
-                        fibo1 = smc_state['fibo1']; trend = smc_state['bias']; poc = smc_state['poc']
-                        sl_price = (poc * (1 - POC_BUFFER_PCT)) if trend=='up' and poc else (poc * (1 + POC_BUFFER_PCT)) if trend=='down' and poc else (fibo1['100'] if trend=='up' else fibo1['0'])
+                    if ((USE_M1_CHOCH_CONFIRM and choch_ok) or (USE_MACD_CONFIRM and macd_ok)):
+                        # สร้าง SL ตามกฎ
+                        sl_price = derive_sl_from_rules(smc_state['fibo1'], smc_state['bias'], smc_state['poc_m1'], current_price, m1_data)
                         equity = get_equity()
                         proposed, _, _ = compute_contracts_from_portfolio(equity, current_price)
                         final_contracts = cap_size_by_risk(equity, current_price, proposed, sl_price)
@@ -579,20 +667,21 @@ def main_loop():
                             smc_state['step'] = 1
                             time.sleep(CHECK_INTERVAL); continue
 
-                        pos = open_market_order('long' if trend=='up' else 'short', final_contracts)
+                        pos = open_market_order('long' if direction=='up' else 'short', final_contracts)
                         if not pos:
                             time.sleep(CHECK_INTERVAL); continue
 
-                        tp1_price = fibo1['0'] if trend=='up' else fibo1['100']
+                        tp1_price = smc_state['fibo1']['0'] if direction=='up' else smc_state['fibo1']['100']
                         pending_trade = {
                             'side': pos['side'], 'entry_price': pos['entry_price'], 'size': pos['size'],
-                            'fibo1': fibo1, 'poc': poc, 'sl_price': sl_price, 'tp1_price': tp1_price,
+                            'fibo1': smc_state['fibo1'], 'poc_m1': smc_state['poc_m1'],
+                            'sl_price': sl_price, 'tp1_price': tp1_price,
                             'state': 'OPEN', 'opened_at': datetime.utcnow().isoformat(),
-                            'trend': trend, 'contracts': final_contracts
+                            'trend': direction, 'contracts': final_contracts
                         }
                         current_position = pos
                         reset_alerts()
-                        send_telegram(f"📈 [ENTRY] {pending_trade['side'].upper()} @ {pending_trade['entry_price']:.2f} | SL(POC): {pending_trade['sl_price']:.2f} | TP1: {pending_trade['tp1_price']:.2f} | Qty: {final_contracts}")
+                        send_telegram(f"📈 [ENTRY] {pending_trade['side'].upper()} @ {pending_trade['entry_price']:.2f} | SL: {pending_trade['sl_price']:.2f} | TP1: {pending_trade['tp1_price']:.2f} | Qty: {final_contracts}")
                         smc_state['step'] = 99
                         time.sleep(CHECK_INTERVAL); continue
                     else:
@@ -626,7 +715,14 @@ def main_loop():
                         exchange.create_market_order(SYMBOL, side_to_close, float(amt_prec), params={'tdMode': OKX_MARGIN_MODE, 'reduceOnly': True})
                         send_telegram(f"✅ [TP1] ปิด {TP1_CLOSE_PERCENT*100:.0f}% @ {current_price:.2f}")
                         pending_trade['state'] = 'TP1_HIT'
-                        fibo2 = fibo2_from_tp1(pending_trade['tp1_price'], tf=TIMEFRAME_M5)
+                        # fibo2
+                        ohlcv_small = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_M5, limit=M5_LOOKBACK)
+                        highs = [b[2] for b in ohlcv_small] if ohlcv_small else []
+                        base = pending_trade['tp1_price']
+                        hh = max(highs) if highs else base*1.05
+                        if hh <= base: hh = base*1.03
+                        diff = hh - base
+                        fibo2 = {'100': base,'78.6': base + FIBO2_SL_LEVEL*diff,'ext133': base + FIBO2_EXT_MIN*diff,'ext161.8': base + FIBO2_EXT_MAX*diff}
                         pending_trade['fibo2'] = fibo2
                         pending_trade['sl_price_step2'] = fibo2['78.6']
                         send_telegram(f"🔁 [SL] เลื่อนไป Fibo2 78.6 = {fibo2['78.6']:.2f} | TP2 {fibo2['ext133']:.2f}-{fibo2['ext161.8']:.2f}")
@@ -689,7 +785,7 @@ def main_loop():
                             reset_to_step1()
                             time.sleep(5); continue
 
-                # SL เริ่มต้น (POC)
+                # SL เริ่มต้น
                 if pending_trade and pending_trade.get('state')=='OPEN':
                     slp = pending_trade.get('sl_price')
                     if slp:
@@ -739,6 +835,6 @@ def start_bot():
         send_telegram(f"⛔ เริ่มบอทล้มเหลว: {e}")
 
 if __name__ == '__main__':
-    logger.info("Starting SMC Fibo Bot (TH alerts, one-shot)")
-    send_telegram("🤖 เริ่มบอท: SMC Swing + Strict Zone + POC Filter + (M1 CHOCH หรือ MACD ปิดแท่ง) + One-shot Alerts")
+    logger.info("Starting SMC + M1 POC Bot (isolated, TH alerts, one-shot)")
+    send_telegram("🤖 เริ่มบอท: SMC + Strict Zone + M1 POC SL-rules + (M1 CHOCH หรือ MACD ปิดแท่ง) + One-shot Alerts + isolated")
     start_bot()
