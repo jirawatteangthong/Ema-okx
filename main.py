@@ -2,7 +2,7 @@
 # SMC + Fibo + M1 POC (pullback) + SL Hierarchy + Strict Zone + One-shot Alerts (C2)
 # Entry: (M1 CHOCH or MACD(12,26,9) cross) on closed candle, same trend
 # OKX Futures (ccxt) | isolated | leverage 20 | risk-capped for small account (31 USDT)
-# Telegram & Monthly Summary
+# Telegram & Monthly Summary/
 
 import os
 import time
