@@ -42,8 +42,8 @@ TARGET_PORTFOLIO_FACTOR = 0.25    # ใช้ 25% ของ equity
 TARGET_RISK_PCT = 0.005           # เสี่ยง 0.5% ต่อไม้
 ACTUAL_OKX_MARGIN_FACTOR = 0.07   # ปัจจุบัน
 
-# Alerts / Toggles
-STEP_ALERT = True
+# Alerts / Toggles True=เปิด False=ปิด
+STEP_ALERT = True #แจ้งเตือน
 USE_M1_CHOCH_CONFIRM = True
 USE_MACD_CONFIRM = True
 USE_POC_FILTER = True  # H1 close vs POC(M1) cancel (ตามทิศ)
