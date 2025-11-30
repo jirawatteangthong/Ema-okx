@@ -2,7 +2,7 @@
 # SMC + Fibo + M1 POC (pullback) + SL Hierarchy + Strict Zone + One-shot Alerts (C2)
 # Entry: (M1 CHOCH or MACD(12,26,9) cross) on closed candle, same trend
 # OKX Futures (ccxt) | isolated | leverage 20 | risk-capped for small account (31 USDT)
-# Telegram & Monthly Summary/
+# Telegram & Monthly Summary / PAPER MODE
 
 import os
 import time
@@ -17,6 +17,14 @@ import ccxt
 import requests
 import numpy as np
 import pandas as pd
+
+# =========================
+# PAPER / DRY TRADING MODE
+# =========================
+# True  = โหมดทดลอง (ไม่ส่งคำสั่งไป OKX จริง แต่ใช้ราคาจริง)
+# False = โหมดเงินจริง
+PAPER_TRADING = True
+PAPER_START_BALANCE = 50.0  # ทุนสมมติสำหรับ paper mode (USDT)
 
 # ---------------------------
 # CONFIG
@@ -43,7 +51,7 @@ TARGET_RISK_PCT = 0.005           # เสี่ยง 0.5% ต่อไม้
 ACTUAL_OKX_MARGIN_FACTOR = 0.07   # ปัจจุบัน
 
 # Alerts / Toggles True=เปิด False=ปิด
-STEP_ALERT = True #แจ้งเตือน
+STEP_ALERT = True  # แจ้งเตือน
 USE_M1_CHOCH_CONFIRM = True
 USE_MACD_CONFIRM = True
 USE_POC_FILTER = True  # H1 close vs POC(M1) cancel (ตามทิศ)
@@ -77,33 +85,8 @@ POC_ENTRY_BUFFER_PCT = 0.001  # ไม่ใช้แล้ว
 POC_SL_BUFFER_PCT = 0.001     # ไม่ใช้แล้ว
 POC_SL_HARD_BUFFER_PCT = 0.001  # ไม่ใช้แล้ว
 
-# ตามที่เลือก: SL ใต้ POC = 0.10%
-POC_SL_BUFFER_B = 0.001  # ค่า default ไม่ใช้
-POC_SL_BUFFER = 0.001    # จะ override ด้านล่าง
-POC_SL_BUFFER = 0.001    # dummy
-POC_SL_BUFFER = 0.001
-
-# สรุปให้ตรง Option B = 0.10%
-POC_SL_BUFFER = 0.001    # placeholder
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-POC_SL_BUFFER = 0.001
-
 # ตั้งจริง (0.10%)
-POC_SL_BUFFER = 0.001 * 100  # 0.10%
-POC_SL_BUFFER = 0.001        # fix to 0.10? (แก้: ใช้ค่าแบบตรง 0.001*100 ไม่เหมาะ) -> ใช้ 0.001? จะเป็น 0.1%
-# แก้ให้ง่าย:
-POC_SL_BUFFER = 0.001        # 0.1% (0.001)
+POC_SL_BUFFER = 0.001  # 0.1%
 
 STATS_FILE = 'trades_stats.json'
 
@@ -119,15 +102,23 @@ logger = logging.getLogger('smc_m1poc_bot')
 exchange = None
 market_info = None
 
-current_position = None
+current_position = None       # ใช้ทั้ง paper และ real
 pending_trade = None
 cooldown_until = None
+
 monthly_stats = {
     'month_year': None,
     'tp_count': 0,
     'sl_count': 0,
+    'be_count': 0,       # กันทุน (Break-even)
     'total_pnl': 0.0,
     'trades': []
+}
+
+# wallet จำลองสำหรับ PAPER MODE
+paper_wallet = {
+    'balance': PAPER_START_BALANCE,
+    'equity': PAPER_START_BALANCE,
 }
 
 # STEP Machine
@@ -182,12 +173,15 @@ def setup_exchange():
         'options': {'defaultType': 'swap', 'adjustForTimeDifference': True},
         'timeout': 30000
     })
-    exchange.set_sandbox_mode(False)  # set True for sandbox
+    exchange.set_sandbox_mode(False)  # ต้องการราคาจริง แม้จะใช้ paper
     exchange.load_markets()
     market_info = exchange.market(SYMBOL)
     try:
-        exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': OKX_MARGIN_MODE})
-        logger.info(f"Set leverage {LEVERAGE}x {OKX_MARGIN_MODE} for {SYMBOL}")
+        if not PAPER_TRADING:
+            exchange.set_leverage(LEVERAGE, SYMBOL, params={'mgnMode': OKX_MARGIN_MODE})
+            logger.info(f"Set leverage {LEVERAGE}x {OKX_MARGIN_MODE} for {SYMBOL}")
+        else:
+            logger.info("PAPER MODE: skip setting leverage on real account.")
     except Exception as e:
         logger.warning("Set leverage failed: %s", e)
 
@@ -326,16 +320,11 @@ def m1_pullback_subset_for_poc(m1, fibo1, bias):
     - สำหรับ downtrend: สลับด้าน
     """
     if not m1: return []
-    lo = fibo1['100']; hi = fibo1['61.8']  # uptrend: close between [low .. 61.8]
     if bias == 'up':
-        selected = [b for b in m1 if lo <= b[4] <= fibo1['0']]
-        # เน้นเฉพาะย่อ จึงกรองเข้ม: ระหว่าง 61.8..100
+        selected = [b for b in m1 if fibo1['100'] <= b[4] <= fibo1['0']]
         selected = [b for b in selected if fibo1['100'] <= b[4] <= fibo1['61.8']]
     else:
-        # downtrend: mirror
-        lo_d, hi_d = fibo1['38.2'], fibo1['0']  # ใกล้ 0 คือบน
         selected = [b for b in m1 if fibo1['100'] <= b[4] <= fibo1['0']]
-        # สำหรับลง: โซนย่อคือ 38.2..100 จากมุมมองบนลงล่าง (ใช้ mapping แบบสมมาตรอย่างง่าย)
         selected = [b for b in selected if fibo1['38.2'] <= b[4] <= fibo1['0']]
     return selected
 
@@ -353,6 +342,9 @@ def price_in_range(p, a, b):
 # SIZE / RISK
 # ---------------------------
 def get_equity():
+    # ในโหมด PAPER ใช้ balance จำลอง
+    if PAPER_TRADING:
+        return float(paper_wallet['equity'])
     try:
         bal = exchange.fetch_balance(params={'type': 'trade'})
         if 'USDT' in bal and 'total' in bal['USDT']:
@@ -388,11 +380,34 @@ def cap_size_by_risk(equity, entry_price, proposed_contracts, sl_price):
 # ORDERS
 # ---------------------------
 def open_market_order(direction: str, contracts: int):
-    side = 'buy' if direction == 'long' else 'sell'
+    """
+    ถ้า PAPER_TRADING = True -> จำลองการเปิดออเดอร์ (ไม่ยิงไป OKX)
+    ถ้า False -> ส่งคำสั่งจริง
+    """
+    side = 'long' if direction == 'long' else 'short'
+
+    if PAPER_TRADING:
+        try:
+            ticker = exchange.fetch_ticker(SYMBOL)
+            entry_price = float(ticker['last'])
+        except Exception as e:
+            logger.error("[PAPER] fetch_ticker failed on open: %s", e)
+            return None
+        pos = {
+            'side': side,
+            'size': float(contracts),
+            'entry_price': entry_price,
+            'unrealized_pnl': 0.0
+        }
+        logger.info(f"[PAPER] OPEN {side.upper()} {contracts} @ {entry_price:.2f}")
+        return pos
+
+    # -------- REAL ORDER --------
+    real_side = 'buy' if direction == 'long' else 'sell'
     params = {'tdMode': OKX_MARGIN_MODE}
     try:
         amount_to_send = exchange.amount_to_precision(SYMBOL, float(contracts))
-        exchange.create_market_order(SYMBOL, side, float(amount_to_send), params=params)
+        exchange.create_market_order(SYMBOL, real_side, float(amount_to_send), params=params)
         time.sleep(2)
         return get_current_position()
     except Exception as e:
@@ -401,7 +416,34 @@ def open_market_order(direction: str, contracts: int):
         return None
 
 def close_position_by_market(pos):
-    if not pos: return False
+    """
+    PAPER: คำนวณ PnL และอัปเดต paper_wallet
+    REAL : ส่ง reduceOnly order
+    """
+    if not pos:
+        return False
+
+    if PAPER_TRADING:
+        try:
+            ticker = exchange.fetch_ticker(SYMBOL)
+            exit_price = float(ticker['last'])
+        except Exception as e:
+            logger.error("[PAPER] fetch_ticker failed on close: %s", e)
+            return False
+
+        cs = 0.0001
+        side = pos['side']
+        size = float(pos['size'])
+        entry = float(pos['entry_price'])
+        pnl = (exit_price - entry) * size * cs if side == 'long' else (entry - exit_price) * size * cs
+
+        paper_wallet['balance'] += pnl
+        paper_wallet['equity'] = paper_wallet['balance']
+
+        logger.info(f"[PAPER] CLOSE {side.upper()} @ {exit_price:.2f} | PnL={pnl:.4f} | BAL={paper_wallet['balance']:.2f}")
+        return True
+
+    # -------- REAL CLOSE --------
     side_to_close = 'sell' if pos['side'] == 'long' else 'buy'
     params = {'tdMode': OKX_MARGIN_MODE, 'reduceOnly': True}
     try:
@@ -414,6 +456,14 @@ def close_position_by_market(pos):
         return False
 
 def get_current_position():
+    """
+    PAPER: ใช้ current_position ในหน่วยความจำ
+    REAL : ดึงจาก OKX
+    """
+    global current_position
+    if PAPER_TRADING:
+        return current_position
+
     try:
         positions = exchange.fetch_positions([SYMBOL])
         for p in positions:
@@ -454,17 +504,34 @@ def init_market_scan_and_set_trend():
 def add_trade_record(reason, pos_info, closed_price):
     global monthly_stats
     try:
-        entry = pos_info.get('entry_price', 0.0)
-        size = pos_info.get('size', 0.0)
+        entry = float(pos_info.get('entry_price', 0.0))
+        size = float(pos_info.get('size', 0.0))
         cs = 0.0001
-        pnl = (closed_price - entry) * size * cs if pos_info['side']=='long' else (entry - closed_price) * size * cs
-        record = {'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
-                  'side': pos_info['side'], 'entry': entry, 'closed': closed_price,
-                  'size': size, 'pnl': pnl, 'reason': reason}
+        side = pos_info['side']
+        pnl = (closed_price - entry) * size * cs if side == 'long' else (entry - closed_price) * size * cs
+
+        record = {
+            'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'side': side,
+            'entry': entry,
+            'closed': closed_price,
+            'size': size,
+            'pnl': pnl,
+            'reason': reason
+        }
         monthly_stats['trades'].append(record)
         monthly_stats['total_pnl'] += pnl
-        if reason == 'TP': monthly_stats['tp_count'] += 1
-        elif reason == 'SL': monthly_stats['sl_count'] += 1
+
+        # กันทุน: ถ้า pnl ใกล้ 0 มาก ๆ ให้ถือว่า BE
+        if abs(pnl) < 0.1:
+            monthly_stats['be_count'] += 1
+        else:
+            r = reason.upper()
+            if r.startswith('TP'):
+                monthly_stats['tp_count'] += 1
+            elif 'SL' in r:
+                monthly_stats['sl_count'] += 1
+
         save_monthly_stats()
     except Exception as e:
         logger.error("add_trade_record error: %s", e)
@@ -478,19 +545,39 @@ def save_monthly_stats():
         logger.error("save stats error: %s", e)
 
 def monthly_report_thread():
+    """
+    ส่งสรุปรายเดือนทุกวันที่ 20 เวลา 00:05 (UTC)
+    """
+    sent_for_month = None
     while True:
         try:
             now = datetime.utcnow()
-            if now.day == 1 and now.hour == 0 and now.minute == 5:
-                send_telegram(generate_monthly_report()); time.sleep(60)
+            key = now.strftime('%Y-%m')
+            if now.day == 20 and now.hour == 0 and now.minute == 5:
+                if sent_for_month != key:
+                    msg = generate_monthly_report()
+                    send_telegram(msg)
+                    sent_for_month = key
+                    time.sleep(60)
         except Exception as e:
             logger.error("monthly_report_thread error: %s", e)
         time.sleep(30)
 
 def generate_monthly_report():
     t = len(monthly_stats['trades'])
-    return (f"📊 สรุปรายเดือน\nจำนวนเทรด: {t}\nTP: {monthly_stats['tp_count']}\n"
-            f"SL: {monthly_stats['sl_count']}\nPnL สุทธิ: {monthly_stats['total_pnl']:.2f} USDT")
+    tp = monthly_stats['tp_count']
+    sl = monthly_stats['sl_count']
+    be = monthly_stats['be_count']
+    pnl = monthly_stats['total_pnl']
+    return (
+        f"📊 สรุปรายเดือน (Paper={PAPER_TRADING})\n"
+        f"จำนวนเทรด: {t}\n"
+        f"TP: {tp}\n"
+        f"SL: {sl}\n"
+        f"กันทุน (BE): {be}\n"
+        f"PnL สุทธิ: {pnl:.2f} USDT\n"
+        f"Balance ปัจจุบัน (paper): {paper_wallet['balance']:.2f} USDT" if PAPER_TRADING else ""
+    )
 
 # ---------------------------
 # HELPERS (POC FILTER & SL RULE)
@@ -519,7 +606,6 @@ def derive_sl_from_rules(fibo1, bias, poc_m1, price_now, m1=None):
     2) ถ้าแตะ 80–100 และมีสวิง M1 ในโซน ⇒ SL = Swing Low/High (ตามทิศ)
     3) ยังไม่ถึง 80–100 ⇒ SL = Fibo 80
     """
-    # map zone boundaries
     fibo_80 = fibo1['80']
     fibo_100 = fibo1['100']
     in_80_100 = price_in_range(price_now, fibo_80, fibo_100)
@@ -536,7 +622,6 @@ def derive_sl_from_rules(fibo1, bias, poc_m1, price_now, m1=None):
         m1 = fetch_ohlcv_safe(SYMBOL, TIMEFRAME_M1, limit=300)
     m1_closed = m1[:-1] if len(m1) > 1 else m1
     if in_80_100:
-        # หา swing ในโซน
         zone_bars = [b for b in m1_closed if price_in_range(b[4], fibo_80, fibo_100)]
         if zone_bars:
             lows = [b[3] for b in zone_bars]; highs = [b[2] for b in zone_bars]
@@ -549,7 +634,14 @@ def derive_sl_from_rules(fibo1, bias, poc_m1, price_now, m1=None):
     return fibo_80
 
 def reset_to_step1():
-    smc_state.update({'step': 1,'bias': None,'latest_h1_event': None,'fibo1': None,'entry_zone': None,'poc_m1': None})
+    smc_state.update({
+        'step': 1,
+        'bias': None,
+        'latest_h1_event': None,
+        'fibo1': None,
+        'entry_zone': None,
+        'poc_m1': None
+    })
     reset_alerts()
     alert_once("STEP1_WAIT", "🔁 [RESET] กลับ STEP1: รอ H1 SMC (BOS/CHOCH)")
 
@@ -619,20 +711,9 @@ def main_loop():
 
                     if strict_in_zone(current_price, entry_zone):
                         # POC Rule: ถ้า POC อยู่ต่ำกว่า 71.8% (uptrend) → ไม่นับเป็น POC ใช้งาน
-                        # สำหรับ downtrend: mirror (สูงกว่า 28.2% ใกล้ 0)
-                        if poc_m1 is not None:
-                            if smc_state['bias'] == 'up':
-                                if poc_m1 < fibo1['71.8']:
-                                    poc_m1 = None  # ignore
-                            else:
-                                # สำหรับฝั่งลง: ถ้า POC > 28.2% (mirror ของ 71.8) จาก low→high mapping แบบง่าย
-                                # ใช้เกณฑ์: POC ต้องอยู่ "ปลายโซนย่อ" ใกล้ 100
-                                # เราจะถือ valid เฉพาะเมื่ออยู่ใน 80–100 เช่นกัน
-                                if poc_m1 > fibo1['28.2'] if '28.2' in fibo1 else False:
-                                    pass  # simplified: ไม่ใช้ 28.2 ใน dict → ข้าม mirror เชิงซับซ้อน
-
-                                # ใช้เกณฑ์ 80–100 เหมือนกัน
-                                pass
+                        if poc_m1 is not None and smc_state['bias'] == 'up':
+                            if poc_m1 < fibo1['71.8']:
+                                poc_m1 = None  # ignore
 
                         smc_state['poc_m1'] = poc_m1
                         reset_alerts("STEP2_")
@@ -681,7 +762,11 @@ def main_loop():
                         }
                         current_position = pos
                         reset_alerts()
-                        send_telegram(f"📈 [ENTRY] {pending_trade['side'].upper()} @ {pending_trade['entry_price']:.2f} | SL: {pending_trade['sl_price']:.2f} | TP1: {pending_trade['tp1_price']:.2f} | Qty: {final_contracts}")
+                        send_telegram(
+                            f"📈 [ENTRY] {pending_trade['side'].upper()} @ {pending_trade['entry_price']:.2f} "
+                            f"| SL: {pending_trade['sl_price']:.2f} | TP1: {pending_trade['tp1_price']:.2f} "
+                            f"| Qty: {final_contracts} | PAPER={PAPER_TRADING}"
+                        )
                         smc_state['step'] = 99
                         time.sleep(CHECK_INTERVAL); continue
                     else:
@@ -694,9 +779,15 @@ def main_loop():
                 pos = current_position
 
                 if pending_trade is None:
-                    pending_trade = {'side': pos['side'],'entry_price': pos['entry_price'],'size': pos['size'],
-                                     'opened_at': datetime.utcnow().isoformat(),'state': 'OPEN',
-                                     'contracts': pos['size'],'trend': pos['side']=='long' and 'up' or 'down'}
+                    pending_trade = {
+                        'side': pos['side'],
+                        'entry_price': pos['entry_price'],
+                        'size': pos['size'],
+                        'opened_at': datetime.utcnow().isoformat(),
+                        'state': 'OPEN',
+                        'contracts': pos['size'],
+                        'trend': 'up' if pos['side']=='long' else 'down'
+                    }
 
                 # TP1
                 tp1_hit = False
@@ -711,8 +802,19 @@ def main_loop():
                     close_amt = max(1, int(round(pending_trade['contracts'] * TP1_CLOSE_PERCENT)))
                     side_to_close = 'sell' if pos['side']=='long' else 'buy'
                     try:
-                        amt_prec = exchange.amount_to_precision(SYMBOL, float(close_amt))
-                        exchange.create_market_order(SYMBOL, side_to_close, float(amt_prec), params={'tdMode': OKX_MARGIN_MODE, 'reduceOnly': True})
+                        if PAPER_TRADING:
+                            # ปิดบางส่วนใน paper: ลด size ใน current_position
+                            remaining = pending_trade['contracts'] - close_amt
+                            if remaining < 1:
+                                remaining = 1
+                            current_position['size'] = remaining
+                            pending_trade['contracts'] = remaining
+                        else:
+                            amt_prec = exchange.amount_to_precision(SYMBOL, float(close_amt))
+                            exchange.create_market_order(
+                                SYMBOL, side_to_close, float(amt_prec),
+                                params={'tdMode': OKX_MARGIN_MODE, 'reduceOnly': True}
+                            )
                         send_telegram(f"✅ [TP1] ปิด {TP1_CLOSE_PERCENT*100:.0f}% @ {current_price:.2f}")
                         pending_trade['state'] = 'TP1_HIT'
                         # fibo2
@@ -722,10 +824,18 @@ def main_loop():
                         hh = max(highs) if highs else base*1.05
                         if hh <= base: hh = base*1.03
                         diff = hh - base
-                        fibo2 = {'100': base,'78.6': base + FIBO2_SL_LEVEL*diff,'ext133': base + FIBO2_EXT_MIN*diff,'ext161.8': base + FIBO2_EXT_MAX*diff}
+                        fibo2 = {
+                            '100': base,
+                            '78.6': base + FIBO2_SL_LEVEL*diff,
+                            'ext133': base + FIBO2_EXT_MIN*diff,
+                            'ext161.8': base + FIBO2_EXT_MAX*diff
+                        }
                         pending_trade['fibo2'] = fibo2
                         pending_trade['sl_price_step2'] = fibo2['78.6']
-                        send_telegram(f"🔁 [SL] เลื่อนไป Fibo2 78.6 = {fibo2['78.6']:.2f} | TP2 {fibo2['ext133']:.2f}-{fibo2['ext161.8']:.2f}")
+                        send_telegram(
+                            f"🔁 [SL] เลื่อนไป Fibo2 78.6 = {fibo2['78.6']:.2f} "
+                            f"| TP2 {fibo2['ext133']:.2f}-{fibo2['ext161.8']:.2f}"
+                        )
                     except Exception as e:
                         logger.error("TP1 partial close failed: %s", e)
                         send_telegram(f"⚠ ปิดบางส่วน TP1 ล้มเหลว: {e}")
@@ -758,7 +868,7 @@ def main_loop():
                         send_telegram(f"🏁 [TP2] ปิดส่วนที่เหลือ @ {current_price:.2f}")
                         close_position_by_market(pos)
                         pending_trade['state'] = 'TP2_HIT'
-                        add_trade_record('TP', pos, current_price)
+                        add_trade_record('TP2', pos, current_price)
                         cooldown_until = datetime.utcnow() + timedelta(hours=COOLDOWN_H1_AFTER_TRADE)
                         current_position = None; pending_trade = None
                         reset_to_step1()
@@ -770,7 +880,7 @@ def main_loop():
                             send_telegram(f"🛑 [SL2] ปิดส่วนที่เหลือ @ {current_price:.2f}")
                             close_position_by_market(pos)
                             pending_trade['state'] = 'SL_STEP2'
-                            add_trade_record('SL', pos, current_price)
+                            add_trade_record('SL_STEP2', pos, current_price)
                             cooldown_until = datetime.utcnow() + timedelta(hours=COOLDOWN_H1_AFTER_TRADE)
                             current_position = None; pending_trade = None
                             reset_to_step1()
@@ -779,7 +889,7 @@ def main_loop():
                             send_telegram(f"🛑 [SL2] ปิดส่วนที่เหลือ @ {current_price:.2f}")
                             close_position_by_market(pos)
                             pending_trade['state'] = 'SL_STEP2'
-                            add_trade_record('SL', pos, current_price)
+                            add_trade_record('SL_STEP2', pos, current_price)
                             cooldown_until = datetime.utcnow() + timedelta(hours=COOLDOWN_H1_AFTER_TRADE)
                             current_position = None; pending_trade = None
                             reset_to_step1()
@@ -836,5 +946,9 @@ def start_bot():
 
 if __name__ == '__main__':
     logger.info("Starting SMC + M1 POC Bot (isolated, TH alerts, one-shot)")
-    send_telegram("🤖 เริ่มบอท: SMC + Strict Zone + M1 POC SL-rules + (M1 CHOCH หรือ MACD ปิดแท่ง) + One-shot Alerts + isolated")
+    mode_txt = "🧪 โหมดทดลอง (PAPER) — ไม่เปิดออเดอร์จริง" if PAPER_TRADING else "💰 โหมดเงินจริง"
+    send_telegram(
+        f"🤖 เริ่มบอท: SMC + Strict Zone + M1 POC SL-rules + (M1 CHOCH หรือ MACD ปิดแท่ง) + One-shot Alerts "
+        f"+ isolated\n{mode_txt}"
+    )
     start_bot()
